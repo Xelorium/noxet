@@ -2,6 +2,7 @@ library;
 
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math' show Random;
 
 import 'package:flutter/foundation.dart';
 

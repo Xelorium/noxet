@@ -52,6 +52,47 @@ class RxMap<K, V> extends GetListenable<Map<K, V>>
     return val;
   }
 
+  // MapMixin implements the operations below on top of `[]=` and `remove`,
+  // which would notify once per entry. They are delegated to the underlying
+  // map so each call notifies once.
+
+  @override
+  void addAll(Map<K, V> other) {
+    value.addAll(other);
+    refresh();
+  }
+
+  @override
+  void addEntries(Iterable<MapEntry<K, V>> newEntries) {
+    value.addEntries(newEntries);
+    refresh();
+  }
+
+  @override
+  V update(K key, V Function(V value) update, {V Function()? ifAbsent}) {
+    final result = value.update(key, update, ifAbsent: ifAbsent);
+    refresh();
+    return result;
+  }
+
+  @override
+  void updateAll(V Function(K key, V value) update) {
+    value.updateAll(update);
+    refresh();
+  }
+
+  @override
+  void removeWhere(bool Function(K key, V value) test) {
+    value.removeWhere(test);
+    refresh();
+  }
+
+  @override
+  bool containsKey(Object? key) => value.containsKey(key);
+
+  @override
+  int get length => value.length;
+
   // @override
   // @protected
   // Map<K, V> get value {

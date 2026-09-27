@@ -136,6 +136,72 @@ class RxList<E> extends GetListenable<List<E>>
     value.sort(compare);
     refresh();
   }
+
+  // The operations below are implemented by ListMixin on top of `[]=` and
+  // `length=`, which would notify once per moved element. They are
+  // delegated to the underlying list so each call notifies once.
+
+  @override
+  void insert(int index, E element) {
+    value.insert(index, element);
+    refresh();
+  }
+
+  @override
+  E removeAt(int index) {
+    final removed = value.removeAt(index);
+    refresh();
+    return removed;
+  }
+
+  @override
+  E removeLast() {
+    final removed = value.removeLast();
+    refresh();
+    return removed;
+  }
+
+  @override
+  void removeRange(int start, int end) {
+    value.removeRange(start, end);
+    refresh();
+  }
+
+  @override
+  void setRange(int start, int end, Iterable<E> iterable, [int skipCount = 0]) {
+    value.setRange(start, end, iterable, skipCount);
+    refresh();
+  }
+
+  @override
+  void setAll(int index, Iterable<E> iterable) {
+    value.setAll(index, iterable);
+    refresh();
+  }
+
+  @override
+  void fillRange(int start, int end, [E? fill]) {
+    value.fillRange(start, end, fill);
+    refresh();
+  }
+
+  @override
+  void replaceRange(int start, int end, Iterable<E> newContents) {
+    value.replaceRange(start, end, newContents);
+    refresh();
+  }
+
+  @override
+  void shuffle([Random? random]) {
+    value.shuffle(random);
+    refresh();
+  }
+
+  @override
+  void clear() {
+    value.clear();
+    refresh();
+  }
 }
 
 extension ListExtension<E> on List<E> {

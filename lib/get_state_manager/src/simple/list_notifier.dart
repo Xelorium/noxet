@@ -20,23 +20,53 @@ class ListNotifierSingle = ListNotifier with ListNotifierSingleMixin;
 /// A notifier with group of listeners identified by id
 class ListNotifierGroup = ListNotifier with ListNotifierGroupMixin;
 
+/// Listeners of a [ListNotifierSingleMixin], in subscription order, with the
+/// number of times each one was added.
+///
+/// Adding, removing and looking up a listener is O(1). Notifying iterates an
+/// immutable [snapshot] that is rebuilt only after the listeners changed, so
+/// listeners can subscribe or unsubscribe while being notified.
+class _Listeners {
+  // Map literals are insertion ordered (LinkedHashMap).
+  final map = <GetStateUpdate, int>{};
+  List<GetStateUpdate>? _snapshot;
+
+  List<GetStateUpdate> get snapshot => _snapshot ??= List.unmodifiable([
+    for (final entry in map.entries)
+      for (var i = 0; i < entry.value; i++) entry.key,
+  ]);
+
+  void add(GetStateUpdate listener) {
+    map[listener] = (map[listener] ?? 0) + 1;
+    _snapshot = null;
+  }
+
+  void remove(GetStateUpdate listener) {
+    final count = map[listener];
+    if (count == null) return;
+    if (count > 1) {
+      map[listener] = count - 1;
+    } else {
+      map.remove(listener);
+    }
+    _snapshot = null;
+  }
+}
+
 /// This mixin add to Listenable the addListener, removerListener and
 /// containsListener implementation
 mixin ListNotifierSingleMixin on Listenable {
-  List<GetStateUpdate>? _updaters = <GetStateUpdate>[];
-
-  // final int _version = 0;
-  // final int _microtaskVersion = 0;
+  _Listeners? _updaters = _Listeners();
 
   @override
   Disposer addListener(GetStateUpdate listener) {
     assert(_debugAssertNotDisposed());
     _updaters!.add(listener);
-    return () => _updaters?.remove(listener);
+    return () => removeListener(listener);
   }
 
   bool containsListener(GetStateUpdate listener) {
-    return _updaters?.contains(listener) ?? false;
+    return _updaters?.map.containsKey(listener) ?? false;
   }
 
   @override
@@ -63,18 +93,11 @@ mixin ListNotifierSingleMixin on Listenable {
   }
 
   void _notifyUpdate() {
-    // if (_microtaskVersion == _version) {
-    //   _microtaskVersion++;
-    //   scheduleMicrotask(() {
-    //     _version++;
-    //     _microtaskVersion = _version;
-    final list = _updaters?.toList() ?? [];
-
-    for (var element in list) {
-      element();
+    final updaters = _updaters;
+    if (updaters == null || updaters.map.isEmpty) return;
+    for (final listener in updaters.snapshot) {
+      listener();
     }
-    //   });
-    // }
   }
 
   bool get isDisposed => _updaters == null;
@@ -92,7 +115,11 @@ mixin ListNotifierSingleMixin on Listenable {
 
   int get listenersLength {
     assert(_debugAssertNotDisposed());
-    return _updaters!.length;
+    var length = 0;
+    for (final count in _updaters!.map.values) {
+      length += count;
+    }
+    return length;
   }
 
   @mustCallSuper
@@ -191,17 +218,25 @@ class Notifier {
     _notifyData?.disposers.add(listener);
   }
 
+  /// The last notifier read by the current builder, to skip the lookup when
+  /// the same observable is read repeatedly (e.g. iterating an RxList).
+  ListNotifierSingleMixin? _lastRead;
+
   void read(ListNotifierSingleMixin updaters) {
-    final listener = _notifyData?.updater;
-    if (listener != null && !updaters.containsListener(listener)) {
-      updaters.addListener(listener);
-      add(() => updaters.removeListener(listener));
+    final data = _notifyData;
+    if (data == null || identical(updaters, _lastRead)) return;
+    _lastRead = updaters;
+    final listener = data.updater;
+    if (!updaters.containsListener(listener)) {
+      data.disposers.add(updaters.addListener(listener));
     }
   }
 
   T append<T>(NotifyData data, T Function() builder) {
     final previous = _notifyData;
+    final previousRead = _lastRead;
     _notifyData = data;
+    _lastRead = null;
     try {
       final result = builder();
       if (data.disposers.isEmpty && data.throwException) {
@@ -210,15 +245,17 @@ class Notifier {
       return result;
     } finally {
       _notifyData = previous;
+      _lastRead = previousRead;
     }
   }
 }
 
 class NotifyData {
-  const NotifyData(
-      {required this.updater,
-      required this.disposers,
-      this.throwException = true});
+  const NotifyData({
+    required this.updater,
+    required this.disposers,
+    this.throwException = true,
+  });
   final GetStateUpdate updater;
   final List<VoidCallback> disposers;
   final bool throwException;

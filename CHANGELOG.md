@@ -44,6 +44,29 @@
   `MiniStream` honours `cancelOnError` and can be closed twice.
 - `RxObjectMixin.firstRebuild` and `sentToStream` were removed (internal).
 
+### Performance
+
+Measured with `test/benchmarks/notifier_benchmark_test.dart` (best of 5):
+
+| Benchmark | Before | After |
+|---|---|---|
+| notify 100 listeners x 10000 | 5272us | 2571us |
+| notify 1000 listeners x 10000 | 57461us | 24930us |
+| remove + add 1000 of 1000 listeners | 7957us | 551us |
+| read 1000 RxList items in `Obx`, 100 listeners | 10202us | 126us |
+| `RxList.removeAt(0)` x 250 on 1000 items | 16454us | 1002us |
+
+- Listeners are stored in an insertion ordered map: subscribing,
+  unsubscribing and the `Obx` "already subscribed?" check are O(1) instead of
+  O(n), and notifying reuses a cached snapshot instead of copying the list on
+  every notification.
+- Reading the same observable repeatedly inside one `Obx`/`GetX` build (for
+  example iterating an `RxList`) is tracked once.
+- `RxList` `insert`, `removeAt`, `removeLast`, `removeRange`, `setRange`,
+  `setAll`, `fillRange`, `replaceRange`, `shuffle`, `clear` and `RxMap`
+  `addAll`, `addEntries`, `update`, `updateAll`, `removeWhere` notify once
+  instead of once per moved element / entry.
+
 ## [5.0.0-release-candidate-9.3.3]
 
 Fix flutter 3.44.0
