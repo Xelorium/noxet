@@ -86,13 +86,19 @@ class _GetCache<S extends GetLifeCycleMixin> extends WidgetCache<GetWidget<S>> {
   }
 
   @override
+  void didUpdateWidget(GetWidget<S> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    GetWidget._cache[widget!] = _controller;
+  }
+
+  @override
   void onClose() {
-    if (_isCreator) {
+    final controller = _controller;
+    if (_isCreator && controller != null) {
       Future<void>.delayed(Duration.zero, () {
-        widget!.controller.onDelete();
-        Get.log('"${widget!.controller.runtimeType}" onClose() called');
-        Get.log('"${widget!.controller.runtimeType}" deleted from memory');
-        // GetWidget._cache[widget!] = null;
+        controller.onDelete();
+        Get.log('"${controller.runtimeType}" onClose() called');
+        Get.log('"${controller.runtimeType}" deleted from memory');
       });
     }
     info = null;
@@ -101,8 +107,12 @@ class _GetCache<S extends GetLifeCycleMixin> extends WidgetCache<GetWidget<S>> {
 
   @override
   Widget build(BuildContext context) {
-    return Binder(
-      init: () => _controller,
+    // Local Binder: exposes the cached controller to `context.get<S>()`
+    // without registering anything in Get. Its lifecycle is handled above.
+    return Binder<S>(
+      global: false,
+      autoRemove: false,
+      init: () => _controller as S,
       child: widget!.build(context),
     );
   }

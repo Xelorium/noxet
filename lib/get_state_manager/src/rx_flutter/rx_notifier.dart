@@ -28,6 +28,7 @@ extension _Empty on Object {
 mixin StateMixin<T> on ListNotifier {
   T? _value;
   GetStatus<T>? _status;
+  int _futurizeToken = 0;
 
   void _fillInitialStatus() {
     _status = (_value == null || _value!._isEmpty())
@@ -37,13 +38,13 @@ mixin StateMixin<T> on ListNotifier {
 
   GetStatus<T> get status {
     reportRead();
-    return _status ??= _status = GetStatus.loading();
+    return _status ??= GetStatus<T>.loading();
   }
 
   T get state => value;
 
   set status(GetStatus<T> newStatus) {
-    if (newStatus == status) return;
+    if (isDisposed || newStatus == _status) return;
     _status = newStatus;
     if (newStatus is SuccessStatus<T>) {
       _value = newStatus.data;
@@ -59,16 +60,14 @@ mixin StateMixin<T> on ListNotifier {
 
   @protected
   set value(T newValue) {
-    if (_value == newValue) return;
+    if (isDisposed || _value == newValue) return;
     _value = newValue;
     refresh();
   }
 
   @protected
   void change(GetStatus<T> status) {
-    if (status != this.status) {
-      this.status = status;
-    }
+    this.status = status;
   }
 
   void setSuccess(T data) {
@@ -87,23 +86,27 @@ mixin StateMixin<T> on ListNotifier {
     change(GetStatus<T>.empty());
   }
 
+  /// Sets the status to loading, runs [body] and then sets it to success,
+  /// empty (when [useEmpty] is true and the result is null or empty) or
+  /// error. When called again before [body] completes, only the result of
+  /// the latest call is applied.
   void futurize(Future<T> Function() body,
       {T? initialData, String? errorMessage, bool useEmpty = true}) {
-    final compute = body;
+    final token = ++_futurizeToken;
     _value ??= initialData;
     status = GetStatus<T>.loading();
-    compute().then((newValue) {
+    Future<T>.sync(body).then((newValue) {
+      if (token != _futurizeToken || isDisposed) return;
       if ((newValue == null || newValue._isEmpty()) && useEmpty) {
+        _value = newValue;
         status = GetStatus<T>.empty();
       } else {
         status = GetStatus<T>.success(newValue);
       }
-
-      refresh();
-    }, onError: (err) {
-      status = GetStatus.error(
+    }, onError: (Object err) {
+      if (token != _futurizeToken || isDisposed) return;
+      status = GetStatus<T>.error(
           err is Exception ? err : Exception(errorMessage ?? err.toString()));
-      refresh();
     });
   }
 }
@@ -116,26 +119,39 @@ class GetListenable<T> extends ListNotifierSingle implements RxInterface<T> {
   GetListenable(T val) : _value = val;
 
   StreamController<T>? _controller;
+  Disposer? _streamDisposer;
 
+  /// The broadcast controller behind [stream]. It is only subscribed to this
+  /// notifier while the stream has listeners, so it can be listened to,
+  /// cancelled and listened to again.
   StreamController<T> get subject {
-    if (_controller == null) {
-      _controller =
-          StreamController<T>.broadcast(onCancel: addListener(_streamListener));
-      _controller?.add(_value);
+    return _controller ??= StreamController<T>.broadcast(
+      onListen: _onStreamListen,
+      onCancel: _onStreamCancel,
+    );
+  }
 
-      ///TODO: report to controller dispose
-    }
-    return _controller!;
+  void _onStreamListen() {
+    if (isDisposed) return;
+    _streamDisposer ??= addListener(_streamListener);
+  }
+
+  void _onStreamCancel() {
+    _streamDisposer?.call();
+    _streamDisposer = null;
   }
 
   void _streamListener() {
     _controller?.add(_value);
   }
 
+  /// Closes the stream and releases every listener. Calling it more than
+  /// once is a no-op.
   @override
   @mustCallSuper
   void close() {
-    removeListener(_streamListener);
+    if (isDisposed) return;
+    _onStreamCancel();
     _controller?.close();
     dispose();
   }
@@ -157,7 +173,16 @@ class GetListenable<T> extends ListNotifierSingle implements RxInterface<T> {
   }
 
   set value(T newValue) {
-    if (_value == newValue) return;
+    if (isDisposed || _value == newValue) return;
+    _value = newValue;
+    _notify();
+  }
+
+  /// Sets [newValue] and notifies every listener even if it is equal to the
+  /// current value.
+  @protected
+  void forceValue(T newValue) {
+    if (isDisposed) return;
     _value = newValue;
     _notify();
   }

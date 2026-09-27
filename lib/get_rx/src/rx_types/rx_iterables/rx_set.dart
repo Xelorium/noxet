@@ -2,7 +2,9 @@ part of '../rx_types.dart';
 
 class RxSet<E> extends GetListenable<Set<E>>
     with SetMixin<E>, RxObjectMixin<Set<E>> {
-  RxSet([super.initial = const {}]);
+  /// Wraps [initial] (not a copy). Without [initial], starts with a new
+  /// empty set.
+  RxSet([Set<E>? initial]) : super(initial ?? <E>{});
 
   /// Special override to push() element(s) in a reactive way
   /// inside the List,
@@ -130,22 +132,25 @@ extension SetExtension<E> on Set<E> {
     if (condition is bool && condition) addAll(items);
   }
 
-  /// Replaces all existing items of this list with [item]
+  /// Replaces all existing items of this set with [item]
   void assign(E item) {
-    // if (this is RxSet) {
-    //   (this as RxSet)._value;
-    // }
-
-    clear();
+    if (this is RxSet) {
+      (this as RxSet).value.clear();
+    } else {
+      clear();
+    }
     add(item);
   }
 
-  /// Replaces all existing items of this list with [items]
+  /// Replaces all existing items of this set with [items]
   void assignAll(Iterable<E> items) {
-    // if (this is RxSet) {
-    //   (this as RxSet)._value;
-    // }
-    clear();
-    addAll(items);
+    // Copy first: [items] may be a lazy view of this set.
+    final newItems = List<E>.of(items);
+    if (this is RxSet) {
+      (this as RxSet).value.clear();
+    } else {
+      clear();
+    }
+    addAll(newItems);
   }
 }

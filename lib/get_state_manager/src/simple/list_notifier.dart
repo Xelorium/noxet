@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 // This callback remove the listener on addListener function
 typedef Disposer = void Function();
@@ -30,7 +32,7 @@ mixin ListNotifierSingleMixin on Listenable {
   Disposer addListener(GetStateUpdate listener) {
     assert(_debugAssertNotDisposed());
     _updaters!.add(listener);
-    return () => _updaters!.remove(listener);
+    return () => _updaters?.remove(listener);
   }
 
   bool containsListener(GetStateUpdate listener) {
@@ -39,8 +41,9 @@ mixin ListNotifierSingleMixin on Listenable {
 
   @override
   void removeListener(VoidCallback listener) {
-    assert(_debugAssertNotDisposed());
-    _updaters!.remove(listener);
+    // Removing a listener from a disposed notifier is a no-op, so widgets
+    // can safely unsubscribe after the observable has been closed.
+    _updaters?.remove(listener);
   }
 
   @protected
@@ -112,7 +115,8 @@ mixin ListNotifierGroupMixin on Listenable {
   @protected
   void notifyGroupChildrens(Object id) {
     assert(_debugAssertNotDisposed());
-    Notifier.instance.read(_updatersGroupIds![id]!);
+    final updaters = _updatersGroupIds![id];
+    if (updaters != null) Notifier.instance.read(updaters);
   }
 
   bool containsId(Object id) {
@@ -137,10 +141,7 @@ mixin ListNotifierGroupMixin on Listenable {
   }
 
   void removeListenerId(Object id, VoidCallback listener) {
-    assert(_debugAssertNotDisposed());
-    if (_updatersGroupIds!.containsKey(id)) {
-      _updatersGroupIds![id]!.removeListener(listener);
-    }
+    _updatersGroupIds?[id]?.removeListener(listener);
   }
 
   @mustCallSuper
@@ -151,6 +152,7 @@ mixin ListNotifierGroupMixin on Listenable {
   }
 
   Disposer addListenerId(Object? key, GetStateUpdate listener) {
+    assert(_debugAssertNotDisposed());
     _updatersGroupIds![key] ??= ListNotifierSingle();
     return _updatersGroupIds![key]!.addListener(listener);
   }
@@ -159,8 +161,21 @@ mixin ListNotifierGroupMixin on Listenable {
   /// by `GetBuilder()` or similar, so is a way to unlink the state change with
   /// the Widget from the Controller.
   void disposeId(Object id) {
-    _updatersGroupIds?[id]?.dispose();
-    _updatersGroupIds!.remove(id);
+    _updatersGroupIds?.remove(id)?.dispose();
+  }
+}
+
+/// Runs [markNeedsBuild] now, or in a microtask when called while the
+/// widget tree is being built (where marking an element dirty would throw).
+/// [isMounted] is checked again before the deferred call.
+void scheduleRebuild(VoidCallback markNeedsBuild, bool Function() isMounted) {
+  if (SchedulerBinding.instance.schedulerPhase ==
+      SchedulerPhase.persistentCallbacks) {
+    scheduleMicrotask(() {
+      if (isMounted()) markNeedsBuild();
+    });
+  } else {
+    markNeedsBuild();
   }
 }
 
@@ -185,13 +200,17 @@ class Notifier {
   }
 
   T append<T>(NotifyData data, T Function() builder) {
+    final previous = _notifyData;
     _notifyData = data;
-    final result = builder();
-    if (data.disposers.isEmpty && data.throwException) {
-      throw const ObxError();
+    try {
+      final result = builder();
+      if (data.disposers.isEmpty && data.throwException) {
+        throw const ObxError();
+      }
+      return result;
+    } finally {
+      _notifyData = previous;
     }
-    _notifyData = null;
-    return result;
   }
 }
 

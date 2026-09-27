@@ -98,27 +98,32 @@ mixin StatelessObserverComponent on StatelessElement {
   List<Disposer>? disposers = <Disposer>[];
 
   void getUpdate() {
-    // if (disposers != null && !dirty) {
-    //   markNeedsBuild();
-    // }
     if (disposers != null) {
-      scheduleMicrotask(markNeedsBuild);
+      scheduleRebuild(markNeedsBuild, () => disposers != null);
     }
   }
 
   @override
   Widget build() {
+    // Drop the subscriptions of the previous build, so observables that are
+    // no longer read (e.g. behind a condition) stop rebuilding this widget.
+    _dispose();
     return Notifier.instance.append(
         NotifyData(disposers: disposers!, updater: getUpdate), super.build);
+  }
+
+  void _dispose() {
+    final current = disposers!;
+    for (final disposer in current) {
+      disposer();
+    }
+    current.clear();
   }
 
   @override
   void unmount() {
     super.unmount();
-    for (final disposer in disposers!) {
-      disposer();
-    }
-    disposers!.clear();
+    _dispose();
     disposers = null;
   }
 }

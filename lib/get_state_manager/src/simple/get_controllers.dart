@@ -93,13 +93,19 @@ mixin ScrollMixin on GetLifeCycleMixin {
     if (scroll.position.pixels == 0) {
       if (!_canFetchTop) return;
       _canFetchTop = false;
-      await onTopScroll();
-      _canFetchTop = true;
+      try {
+        await onTopScroll();
+      } finally {
+        _canFetchTop = true;
+      }
     } else {
       if (!_canFetchBottom) return;
       _canFetchBottom = false;
-      await onEndScroll();
-      _canFetchBottom = true;
+      try {
+        await onEndScroll();
+      } finally {
+        _canFetchBottom = true;
+      }
     }
   }
 

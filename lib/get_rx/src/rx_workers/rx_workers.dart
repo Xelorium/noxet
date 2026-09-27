@@ -102,9 +102,7 @@ Worker everAll(
   }
 
   Future<void> cancel() async {
-    for (var i in evers) {
-      i.cancel();
-    }
+    await Future.wait([for (final i in evers) i.cancel()]);
   }
 
   return Worker(cancel, '[everAll]');
@@ -183,20 +181,26 @@ Worker interval<T>(
   void Function()? onDone,
   bool? cancelOnError,
 }) {
-  var debounceActive = false;
+  Timer? timer;
   StreamSubscription sub = listener.listen(
-    (event) async {
-      if (debounceActive || !_conditional(condition)) return;
-      debounceActive = true;
-      await Future.delayed(time);
-      debounceActive = false;
-      callback(event);
+    (event) {
+      if (timer != null || !_conditional(condition)) return;
+      timer = Timer(time, () {
+        timer = null;
+        callback(event);
+      });
     },
     onError: onError,
     onDone: onDone,
     cancelOnError: cancelOnError,
   );
-  return Worker(sub.cancel, '[interval]');
+  Future<void> cancel() {
+    timer?.cancel();
+    timer = null;
+    return sub.cancel();
+  }
+
+  return Worker(cancel, '[interval]');
 }
 
 /// [debounce] is similar to [interval], but sends the last value.
@@ -238,7 +242,12 @@ Worker debounce<T>(
     onDone: onDone,
     cancelOnError: cancelOnError,
   );
-  return Worker(sub.cancel, '[debounce]');
+  Future<void> cancel() {
+    newDebouncer.cancel();
+    return sub.cancel();
+  }
+
+  return Worker(cancel, '[debounce]');
 }
 
 class Worker {

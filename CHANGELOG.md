@@ -7,6 +7,43 @@
 - `Get.reset(clearRouteBindings:)` and `Get.resetInstance(clearRouteBindings:)`
   keep the parameter for compatibility but it has no effect anymore.
 
+### Fixes
+
+- `RxList()`, `RxMap()`, `RxSet()` and `RxList.empty()` now start with a
+  modifiable collection.
+- An Rx stream can be listened to again after its last subscription was
+  cancelled (e.g. `ever` disposed and registered again).
+- `Rx.trigger()` notifies `Obx`/`GetX`, also for the first same value.
+- `Rx.close()` is idempotent, cancels `bindStream` subscriptions, and closing
+  an Rx before the `Obx` that reads it is unmounted no longer throws.
+- `Obx`/`GetX`: an exception in the builder no longer leaves the global
+  tracking state pointing at that widget; subscriptions that are no longer
+  read are dropped on rebuild; updates during another widget's build are
+  deferred instead of throwing.
+- `debounce` and `interval` workers no longer fire after `dispose()`.
+- `RxnDouble -` subtracts; `RxnBool ^` returns null for a null value;
+  `RxMap[]` with a key of another type returns null; `assignAll` works with
+  a lazy view of the same collection and `RxMap.assignAll` copies the map and
+  notifies once.
+- `Bind.builder(init:)` / `Binds` use `init`; `Bind.put` removes non-permanent
+  instances on unmount; `Bind.spawn` works and closes its instance.
+- `GetX`/`Bind` with `global: false` close their local controller and no
+  longer delete a global instance of the same type.
+- `GetBuilder` re-subscribes when its `id` changes; `GetWidget` rebuilds with
+  the new widget instance.
+- `Get.putOrFind` starts lazily registered instances; `Foo` with tag `Bar` no
+  longer collides with `FooBar`; `Get.reloadAll()` and `Get.reset()` call
+  `onClose`; `onReady` is not called for an instance closed before the first
+  frame; `isPrepared`/`getInstanceInfo` no longer log errors for missing
+  types.
+- `Get.markAsDirty` (no longer driven by routes): the next registration of
+  the same type replaces the instance and closes the old one.
+- `StateMixin.futurize` notifies once per status, ignores stale results and
+  catches synchronous errors.
+- `ScrollMixin` recovers when `onEndScroll`/`onTopScroll` throws;
+  `MiniStream` honours `cancelOnError` and can be closed twice.
+- `RxObjectMixin.firstRebuild` and `sentToStream` were removed (internal).
+
 ## [5.0.0-release-candidate-9.3.3]
 
 Fix flutter 3.44.0

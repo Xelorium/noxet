@@ -17,7 +17,9 @@ mixin GetLifeCycleMixin {
   @protected
   @mustCallSuper
   void onInit() {
-    Engine.instance.addPostFrameCallback((_) => onReady());
+    Engine.instance.addPostFrameCallback((_) {
+      if (!isClosed) onReady();
+    });
   }
 
   /// Called 1 frame after onInit(). It is the perfect place to start
@@ -45,10 +47,10 @@ mixin GetLifeCycleMixin {
   @mustCallSuper
   @nonVirtual
   void onStart() {
-    // _checkIfAlreadyConfigured();
     if (_initialized) return;
-    onInit();
+    // Flag first so a re-entrant call from inside onInit is ignored.
     _initialized = true;
+    onInit();
   }
 
   bool _isClosed = false;

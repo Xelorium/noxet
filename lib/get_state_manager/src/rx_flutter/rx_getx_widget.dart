@@ -104,10 +104,15 @@ class GetXState<T extends GetLifeCycleMixin> extends State<GetX<T>> {
   @override
   void dispose() {
     if (widget.dispose != null) widget.dispose!(this);
-    if (_isCreator! || widget.assignId) {
-      if (widget.autoRemove && Get.isRegistered<T>(tag: widget.tag)) {
+    if (widget.global) {
+      if ((_isCreator! || widget.assignId) &&
+          widget.autoRemove &&
+          Get.isRegistered<T>(tag: widget.tag)) {
         Get.delete<T>(tag: widget.tag);
       }
+    } else if (widget.autoRemove) {
+      // Local controller: owned by this widget, never registered in Get.
+      controller?.onDelete();
     }
 
     for (final disposer in disposers) {
@@ -122,17 +127,23 @@ class GetXState<T extends GetLifeCycleMixin> extends State<GetX<T>> {
   }
 
   void _update() {
-    if (mounted) {
-      setState(() {});
-    }
+    if (!mounted) return;
+    scheduleRebuild(() => setState(() {}), () => mounted);
   }
 
   final disposers = <Disposer>[];
 
   @override
-  Widget build(BuildContext context) => Notifier.instance.append(
-      NotifyData(disposers: disposers, updater: _update),
-      () => widget.builder(controller!));
+  Widget build(BuildContext context) {
+    // Only keep the subscriptions of the current build.
+    for (final disposer in disposers) {
+      disposer();
+    }
+    disposers.clear();
+    return Notifier.instance.append(
+        NotifyData(disposers: disposers, updater: _update),
+        () => widget.builder(controller!));
+  }
 
   @override
   void debugFillProperties(DiagnosticPropertiesBuilder properties) {

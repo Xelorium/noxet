@@ -32,11 +32,13 @@ class MiniStream<T> {
   }
 
   void add(T event) {
+    if (_isClosed) return;
     _value = event;
     listenable._notifyData(event);
   }
 
   void addError(Object error, [StackTrace? stackTrace]) {
+    if (_isClosed) return;
     listenable._notifyError(error, stackTrace);
   }
 
@@ -63,10 +65,9 @@ class MiniStream<T> {
 
   bool _isClosed = false;
 
+  /// Notifies `onDone` and removes every listener. Closing twice is a no-op.
   void close() {
-    if (_isClosed) {
-      throw 'You can not close a closed Stream';
-    }
+    if (_isClosed) return;
     listenable._notifyDone();
     listenable.clear();
     _isClosed = true;
@@ -97,8 +98,20 @@ class FastList<T> {
   void _notifyError(Object error, [StackTrace? stackTrace]) {
     var currentNode = _head;
     while (currentNode != null) {
-      currentNode.data?.onError?.call(error, stackTrace);
-      currentNode = currentNode.next;
+      final subscription = currentNode.data;
+      final next = currentNode.next;
+      final onError = subscription?.onError;
+      if (onError is void Function(Object, StackTrace)) {
+        onError(error, stackTrace ?? StackTrace.current);
+      } else if (onError is void Function(Object)) {
+        onError(error);
+      } else if (onError != null) {
+        onError.call(error, stackTrace);
+      }
+      if (subscription != null && subscription.cancelOnError) {
+        _removeNode(currentNode);
+      }
+      currentNode = next;
     }
   }
 
@@ -134,7 +147,7 @@ class FastList<T> {
     _length++;
   }
 
-  bool contains(T element) {
+  bool contains(MiniSubscription<T> element) {
     var currentNode = _head;
     while (currentNode != null) {
       if (currentNode.data == element) return true;

@@ -67,9 +67,6 @@ mixin RxObjectMixin<T> on GetListenable<T> {
     return value;
   }
 
-  bool firstRebuild = true;
-  bool sentToStream = false;
-
   /// Same as `toString()` but using a getter.
   String get string => value.toString();
 
@@ -94,18 +91,6 @@ mixin RxObjectMixin<T> on GetListenable<T> {
   // ignore: avoid_equals_and_hash_code_on_mutable_classes
   int get hashCode => value.hashCode;
 
-  /// Updates the [value] and adds it to the stream, updating the observer
-  /// Widget, only if it's different from the previous value.
-  @override
-  set value(T val) {
-    if (isDisposed) return;
-    sentToStream = false;
-    if (value == val && !firstRebuild) return;
-    firstRebuild = false;
-    sentToStream = true;
-    super.value = val;
-  }
-
   /// Returns a [StreamSubscription] similar to [listen], but with the
   /// added benefit that it primes the stream with the current [value], rather
   /// than waiting for the next [value]. This should not be called in [onInit]
@@ -124,16 +109,36 @@ mixin RxObjectMixin<T> on GetListenable<T> {
     return subscription;
   }
 
+  List<StreamSubscription<T>>? _boundSubscriptions;
+
   /// Binds an existing `Stream<T>` to this `Rx<T>` to keep the values in sync.
   /// You can bind multiple sources to update the value.
-  /// Closing the subscription will happen automatically when the observer
-  /// Widget (`GetX` or `Obx`) gets unmounted from the Widget tree.
+  /// The subscriptions are cancelled when this Rx is closed, or when the
+  /// observer Widget (`GetX` or `Obx`) that called [bindStream] during its
+  /// build is unmounted.
   void bindStream(Stream<T> stream) {
-    // final listSubscriptions =
-    //     _subscriptions[subject] ??= <StreamSubscription>[];
+    final subscriptions = _boundSubscriptions ??= <StreamSubscription<T>>[];
+    late final StreamSubscription<T> sub;
+    sub = stream.listen((va) => value = va, onDone: () {
+      subscriptions.remove(sub);
+    });
+    subscriptions.add(sub);
+    reportAdd(() {
+      subscriptions.remove(sub);
+      sub.cancel();
+    });
+  }
 
-    final sub = stream.listen((va) => value = va);
-    reportAdd(sub.cancel);
+  @override
+  void close() {
+    final subscriptions = _boundSubscriptions;
+    _boundSubscriptions = null;
+    if (subscriptions != null) {
+      for (final sub in subscriptions) {
+        sub.cancel();
+      }
+    }
+    super.close();
   }
 }
 
@@ -197,15 +202,7 @@ abstract class _RxImpl<T> extends GetListenable<T> with RxObjectMixin<T> {
   /// secondsRx.trigger(2);   // This will trigger the listener independently from the value.
   /// ```
   ///
-  void trigger(T v) {
-    var firstRebuild = this.firstRebuild;
-    value = v;
-    // If it's not the first rebuild, the listeners have been called already
-    // So we won't call them again.
-    if (!firstRebuild && !sentToStream) {
-      subject.add(v);
-    }
-  }
+  void trigger(T v) => forceValue(v);
 }
 
 class RxBool extends Rx<bool> {
@@ -265,7 +262,12 @@ extension RxnBoolExt on Rx<bool?> {
     return null;
   }
 
-  bool? operator ^(bool other) => !other == value;
+  bool? operator ^(bool other) {
+    if (value != null) {
+      return other != value;
+    }
+    return null;
+  }
 
   /// Toggles the bool [value] between false and true.
   /// A shortcut for `flag.value = !flag.value;`
@@ -288,7 +290,7 @@ class Rx<T> extends _RxImpl<T> {
   dynamic toJson() {
     try {
       return (value as dynamic)?.toJson();
-    } on Exception catch (_) {
+    } on NoSuchMethodError catch (_) {
       throw '$T has not method [toJson]';
     }
   }
@@ -301,7 +303,7 @@ class Rxn<T> extends Rx<T?> {
   dynamic toJson() {
     try {
       return (value as dynamic)?.toJson();
-    } on Exception catch (_) {
+    } on NoSuchMethodError catch (_) {
       throw '$T has not method [toJson]';
     }
   }

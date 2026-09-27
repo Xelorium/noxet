@@ -28,6 +28,15 @@ class GetWidgetCacheElement extends ComponentElement {
   @override
   Widget build() => cache.build(this);
 
+  @override
+  void update(GetWidgetCache newWidget) {
+    final oldWidget = cache._widget!;
+    super.update(newWidget);
+    cache._widget = newWidget;
+    cache.didUpdateWidget(oldWidget);
+    rebuild(force: true);
+  }
+
   final WidgetCache<GetWidgetCache> cache;
 
   @override
@@ -60,6 +69,11 @@ abstract class WidgetCache<T extends GetWidgetCache> {
   @protected
   @mustCallSuper
   void onClose() {}
+
+  /// Called when the element is updated with a new widget instance.
+  @protected
+  @mustCallSuper
+  void didUpdateWidget(covariant T oldWidget) {}
 
   @protected
   Widget build(BuildContext context);

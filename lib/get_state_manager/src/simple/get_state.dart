@@ -126,7 +126,7 @@ abstract class Bind<T> extends StatelessWidget {
   }) {
     Get.put<S>(dependency, tag: tag, permanent: permanent);
     return _FactoryBind<S>(
-      autoRemove: permanent,
+      autoRemove: !permanent,
       assignId: true,
       tag: tag,
     );
@@ -165,10 +165,13 @@ abstract class Bind<T> extends StatelessWidget {
   static Bind spawn<S>(InstanceBuilderCallback<S> builder,
       {String? tag, bool permanent = true}) {
     Get.spawn<S>(builder, tag: tag, permanent: permanent);
+    // Each Bind gets its own instance from the factory and closes it when
+    // unmounted. The factory itself is removed unless it is permanent.
     return _FactoryBind<S>(
+      init: () => Get.find<S>(tag: tag),
       tag: tag,
       global: false,
-      autoRemove: permanent,
+      dispose: permanent ? null : (_) => Get.delete<S>(tag: tag),
     );
   }
 
@@ -336,6 +339,7 @@ class _FactoryBind<T> extends Bind<T> {
   @override
   Widget build(BuildContext context) {
     return Binder<T>(
+      init: init,
       create: create,
       global: global,
       autoRemove: autoRemove,
@@ -445,7 +449,6 @@ class BindElement<T> extends InheritedElement {
 
   bool? _isCreator = false;
   bool? _needStart = false;
-  bool _wasStarted = false;
   VoidCallback? _remove;
   Object? _filter;
 
@@ -474,15 +477,10 @@ class BindElement<T> extends InheritedElement {
         }
       }
     } else {
-      if (widget.create != null) {
-        _controllerBuilder = () => widget.create!.call(this);
-        Get.spawn<T>(_controllerBuilder!, tag: widget.tag, permanent: false);
-      } else {
-        _controllerBuilder = widget.init;
-      }
-      _controllerBuilder =
-          (widget.create != null ? () => widget.create!.call(this) : null) ??
-              widget.init;
+      // Local controller: owned by this element, never registered in Get.
+      _controllerBuilder = widget.create != null
+          ? () => widget.create!.call(this) as T
+          : widget.init;
       _isCreator = true;
       _needStart = true;
     }
@@ -501,7 +499,6 @@ class BindElement<T> extends InheritedElement {
     if (_needStart == true && localController is GetLifeCycleMixin) {
       localController.onStart();
       _needStart = false;
-      _wasStarted = true;
     }
 
     if (localController is GetxController) {
@@ -530,10 +527,15 @@ class BindElement<T> extends InheritedElement {
 
   void dispose() {
     widget.dispose?.call(this);
-    if (_isCreator! || widget.assignId) {
-      if (widget.autoRemove && Get.isRegistered<T>(tag: widget.tag)) {
+    if (widget.global) {
+      if ((_isCreator! || widget.assignId) &&
+          widget.autoRemove &&
+          Get.isRegistered<T>(tag: widget.tag)) {
         Get.delete<T>(tag: widget.tag);
       }
+    } else if (widget.autoRemove) {
+      final localController = _controller;
+      if (localController is GetLifeCycleMixin) localController.onDelete();
     }
 
     for (final disposer in disposers) {
@@ -559,13 +561,13 @@ class BindElement<T> extends InheritedElement {
 
   @override
   void update(Binder<T> newWidget) {
-    final oldNotifier = widget.id;
-    final newNotifier = newWidget.id;
-    if (oldNotifier != newNotifier && _wasStarted) {
+    final oldWidget = widget;
+    newWidget.didUpdateWidget?.call(oldWidget, this);
+    super.update(newWidget);
+    // Re-subscribe with the new id once `widget` points to [newWidget].
+    if (oldWidget.id != newWidget.id && _controller != null) {
       _subscribeToController();
     }
-    widget.didUpdateWidget?.call(widget, this);
-    super.update(newWidget);
   }
 
   @override
