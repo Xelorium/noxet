@@ -1,218 +1,122 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-// import 'lang/translation_service.dart';
-// import 'routes/app_pages.dart';
-// import 'shared/logger/logger_utils.dart';
-
-// void main() {
-//   runApp(const MyApp());
-// }
-
-// class MyApp extends StatelessWidget {
-//   const MyApp({Key? key}) : super(key: key);
-
-//   @override
-//   Widget build(BuildContext context) {
-//     return GetMaterialApp(
-//       theme: ThemeData(useMaterial3: true),
-//       debugShowCheckedModeBanner: false,
-//       enableLog: true,
-//       logWriterCallback: Logger.write,
-//       initialRoute: AppPages.INITIAL,
-//       getPages: AppPages.routes,
-//       locale: TranslationService.locale,
-//       fallbackLocale: TranslationService.fallbackLocale,
-//       translations: TranslationService(),
-//     );
-//   }
-// }
-
-/// Nav 2 snippet
 void main() {
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return GetMaterialApp(
-      getPages: [
-        GetPage(
-            participatesInRootNavigator: true,
-            name: '/first',
-            page: () => const First()),
-        GetPage(
-          name: '/second',
-          page: () => const Second(),
-          transition: Transition.downToUp,
-        ),
-        GetPage(
-          name: '/third',
-          page: () => const Third(),
-        ),
-        GetPage(
-          name: '/fourth',
-          page: () => const Fourth(),
-        ),
-      ],
-      debugShowCheckedModeBanner: false,
+    return MaterialApp(
+      title: 'get state management',
+      home: Binds(
+        binds: HomeBinding().dependencies(),
+        child: const HomePage(),
+      ),
     );
   }
 }
 
-class FirstController extends GetxController {
+class HomeBinding extends Binding {
   @override
-  void onClose() {
-    print('on close first');
-    super.onClose();
+  List<Bind> dependencies() => [
+        Bind.lazyPut<CounterController>(() => CounterController()),
+        Bind.lazyPut<TodoController>(() => TodoController()),
+        Bind.lazyPut<QuoteController>(() => QuoteController()),
+      ];
+}
+
+/// Reactive state: `.obs` + `Obx`.
+class CounterController extends GetxController {
+  final count = 0.obs;
+
+  void increment() => count.value++;
+}
+
+/// Simple state: `update()` + `GetBuilder`.
+class TodoController extends GetxController {
+  final todos = <String>[];
+
+  void add(String todo) {
+    todos.add(todo);
+    update();
+  }
+
+  void removeAt(int index) {
+    todos.removeAt(index);
+    update();
   }
 }
 
-class First extends StatelessWidget {
-  const First({Key? key}) : super(key: key);
+/// Async state: `StateMixin` + `futurize` + `obx`.
+class QuoteController extends GetxController with StateMixin<String> {
+  int _next = 0;
+
+  @override
+  void onInit() {
+    super.onInit();
+    load();
+  }
+
+  void load() {
+    futurize(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      const quotes = ['Keep it simple.', 'Make it work, then make it fast.'];
+      return quotes[_next++ % quotes.length];
+    });
+  }
+}
+
+class HomePage extends StatelessWidget {
+  const HomePage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    print('First rebuild');
-    Get.put(FirstController());
+    final counter = Get.find<CounterController>();
+    final quote = Get.find<QuoteController>();
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('page one'),
-        leading: IconButton(
-          icon: const Icon(Icons.more),
-          onPressed: () {
-            Get.snackbar(
-              'title',
-              "message",
-              mainButton:
-                  TextButton(onPressed: () {}, child: const Text('button')),
-              isDismissible: true,
-              duration: Duration(seconds: 5),
-              snackbarStatus: (status) => print(status),
-            );
-            // print('THEME CHANGED');
-            // Get.changeTheme(
-            //     Get.isDarkMode ? ThemeData.light() : ThemeData.dark());
-          },
-        ),
-      ),
-      body: Center(
-        child: SizedBox(
-          height: 300,
-          width: 300,
-          child: ElevatedButton(
-            onPressed: () {
-              Get.toNamed('/second?id=123');
-            },
-            child: const Text('next screen'),
+      appBar: AppBar(title: const Text('get state management')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Obx(() => Text('Count: ${counter.count.value}',
+              style: Theme.of(context).textTheme.headlineSmall)),
+          const Divider(),
+          quote.obx(
+            (value) => Text(value),
+            onLoading: const LinearProgressIndicator(),
+            onError: (error) => Text('Error: $error'),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class SecondController extends GetxController {
-  final textEdit = TextEditingController();
-  @override
-  void onClose() {
-    print('on close second');
-    textEdit.dispose();
-    super.onClose();
-  }
-}
-
-class Second extends StatelessWidget {
-  const Second({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = Get.put(SecondController());
-    print('second rebuild');
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) => print('pop invoked'),
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('page two ${Get.parameters["id"]}'),
-        ),
-        body: Center(
-          child: Column(
-            children: [
-              Expanded(
-                  child: TextField(
-                controller: controller.textEdit,
-              )),
-              SizedBox(
-                height: 300,
-                width: 300,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Get.toNamed('/third');
-                  },
-                  child: const Text('next screen'),
+          TextButton(onPressed: quote.load, child: const Text('Next quote')),
+          const Divider(),
+          GetBuilder<TodoController>(
+            builder: (controller) => Column(
+              children: [
+                for (var i = 0; i < controller.todos.length; i++)
+                  ListTile(
+                    title: Text(controller.todos[i]),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete),
+                      onPressed: () => controller.removeAt(i),
+                    ),
+                  ),
+                TextButton(
+                  onPressed: () => controller
+                      .add('Todo ${controller.todos.length + 1}'),
+                  child: const Text('Add todo'),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
-    );
-  }
-}
-
-class Third extends StatelessWidget {
-  const Third({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.red,
-      appBar: AppBar(
-        title: const Text('page three'),
-      ),
-      body: Center(
-        child: SizedBox(
-          height: 300,
-          width: 300,
-          child: ElevatedButton(
-            onPressed: () {
-              Get.offNamedUntil('/fourth', (route) {
-                return Get.currentRoute == '/first';
-              });
-            },
-            child: const Text('go to first screen'),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class Fourth extends StatelessWidget {
-  const Fourth({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.red,
-      appBar: AppBar(
-        title: const Text('page four'),
-      ),
-      body: Center(
-        child: SizedBox(
-          height: 300,
-          width: 300,
-          child: ElevatedButton(
-            onPressed: () {
-              Get.back();
-            },
-            child: const Text('go to first screen'),
-          ),
-        ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: counter.increment,
+        child: const Icon(Icons.add),
       ),
     );
   }

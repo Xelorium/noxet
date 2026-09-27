@@ -1,5 +1,5 @@
 name: get
-description: Open screens/snackbars/dialogs without context, manage states and inject dependencies easily with GetX.
+description: Reactive and simple state management with dependency injection for Flutter, based on GetX.
 version: 5.0.0-release-candidate-9.3.3
 homepage: https://github.com/jonataslaw/getx
 
@@ -10,9 +10,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_web_plugins:
-    sdk: flutter
-  web: ">=1.1.0 <2.0.0"
 
 dev_dependencies:
   flutter_lints: ^6.0.0

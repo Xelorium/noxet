@@ -1,7 +1,6 @@
 import 'package:flutter/widgets.dart';
 
 import '../../../instance_manager.dart';
-import '../../../utils.dart';
 import 'get_state.dart';
 import 'get_widget_cache.dart';
 
@@ -89,7 +88,7 @@ class _GetCache<S extends GetLifeCycleMixin> extends WidgetCache<GetWidget<S>> {
   @override
   void onClose() {
     if (_isCreator) {
-      Get.asap(() {
+      Future<void>.delayed(Duration.zero, () {
         widget!.controller.onDelete();
         Get.log('"${widget!.controller.runtimeType}" onClose() called');
         Get.log('"${widget!.controller.runtimeType}" deleted from memory');

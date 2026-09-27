@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import '../../get.dart';
+import '../../get_core/get_core.dart';
 
 /// The [GetLifeCycle]
 ///
@@ -20,9 +20,8 @@ mixin GetLifeCycleMixin {
     Engine.instance.addPostFrameCallback((_) => onReady());
   }
 
-  /// Called 1 frame after onInit(). It is the perfect place to enter
-  /// navigation events, like snackbar, dialogs, or a new route, or
-  /// async request.
+  /// Called 1 frame after onInit(). It is the perfect place to start
+  /// async requests or anything that needs the first frame to be rendered.
   void onReady() {}
 
   /// Called before [onDelete] method. [onClose] might be used to

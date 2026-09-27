@@ -1,3 +1,12 @@
+## [Unreleased]
+
+- Package reduced to state management and dependency injection only.
+  Removed `get_navigation`, `get_connect`, `get_animations`, `get_utils`,
+  `GetResponsive`, `example_nav2` and the `web`/`flutter_web_plugins`
+  dependencies.
+- `Get.reset(clearRouteBindings:)` and `Get.resetInstance(clearRouteBindings:)`
+  keep the parameter for compatibility but it has no effect anymore.
+
 ## [5.0.0-release-candidate-9.3.3]
 
 Fix flutter 3.44.0
