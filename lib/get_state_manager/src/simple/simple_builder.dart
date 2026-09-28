@@ -95,35 +95,35 @@ abstract class ObxStatelessWidget extends StatelessWidget {
 
 /// a Component that can track changes in a reactive variable
 mixin StatelessObserverComponent on StatelessElement {
-  List<Disposer>? disposers = <Disposer>[];
+  /// Subscriptions of this element, kept across rebuilds. Null once unmounted.
+  TrackedBuild? _tracked;
 
   void getUpdate() {
-    if (disposers != null) {
-      scheduleRebuild(markNeedsBuild, () => disposers != null);
+    // Already awaiting a rebuild, or unmounted: nothing to schedule.
+    if (_tracked == null || dirty) return;
+    if (isBuildingTree) {
+      scheduleMicrotask(_markNeedsBuildIfAlive);
+    } else {
+      markNeedsBuild();
     }
+  }
+
+  void _markNeedsBuildIfAlive() {
+    if (_tracked != null) markNeedsBuild();
   }
 
   @override
   Widget build() {
-    // Drop the subscriptions of the previous build, so observables that are
-    // no longer read (e.g. behind a condition) stop rebuilding this widget.
-    _dispose();
-    return Notifier.instance.append(
-        NotifyData(disposers: disposers!, updater: getUpdate), super.build);
-  }
-
-  void _dispose() {
-    final current = disposers!;
-    for (final disposer in current) {
-      disposer();
-    }
-    current.clear();
+    // The subscriptions are kept between builds; `append` drops the ones this
+    // build no longer reads (e.g. a read behind a condition).
+    final tracked = _tracked ??= TrackedBuild(updater: getUpdate);
+    return Notifier.instance.append(tracked, super.build);
   }
 
   @override
   void unmount() {
     super.unmount();
-    _dispose();
-    disposers = null;
+    _tracked?.dispose();
+    _tracked = null;
   }
 }

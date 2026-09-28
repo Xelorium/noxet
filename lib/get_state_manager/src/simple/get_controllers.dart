@@ -46,6 +46,20 @@ abstract class GetxController extends ListNotifier with GetLifeCycleMixin {
       }
     }
   }
+
+  /// Notifies every listener of this controller: the ones without an id, like
+  /// [update] does, *plus* every `GetBuilder(id: ...)` group, which [update]
+  /// never reaches.
+  ///
+  /// Parameters:
+  /// - [condition]: If false, the update will be skipped.
+  void updateAll([bool condition = true]) {
+    if (!condition) {
+      return;
+    }
+    refresh();
+    refreshGroupAll();
+  }
 }
 
 /// A mixin that provides scroll-based data fetching capabilities.

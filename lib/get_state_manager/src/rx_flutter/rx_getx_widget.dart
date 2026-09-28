@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
@@ -115,11 +117,7 @@ class GetXState<T extends GetLifeCycleMixin> extends State<GetX<T>> {
       controller?.onDelete();
     }
 
-    for (final disposer in disposers) {
-      disposer();
-    }
-
-    disposers.clear();
+    _tracked.dispose();
 
     controller = null;
     _isCreator = null;
@@ -128,21 +126,28 @@ class GetXState<T extends GetLifeCycleMixin> extends State<GetX<T>> {
 
   void _update() {
     if (!mounted) return;
-    scheduleRebuild(() => setState(() {}), () => mounted);
+    if (isBuildingTree) {
+      scheduleMicrotask(_rebuildIfMounted);
+    } else {
+      _rebuild();
+    }
   }
 
-  final disposers = <Disposer>[];
+  void _rebuildIfMounted() {
+    if (mounted) _rebuild();
+  }
+
+  void _rebuild() => setState(() {});
+
+  /// Subscriptions of this widget, kept across rebuilds.
+  late final _tracked = TrackedBuild(updater: _update);
 
   @override
   Widget build(BuildContext context) {
-    // Only keep the subscriptions of the current build.
-    for (final disposer in disposers) {
-      disposer();
-    }
-    disposers.clear();
+    // The subscriptions are kept between builds; `append` drops the ones this
+    // build no longer reads.
     return Notifier.instance.append(
-        NotifyData(disposers: disposers, updater: _update),
-        () => widget.builder(controller!));
+        _tracked, () => widget.builder(controller!));
   }
 
   @override

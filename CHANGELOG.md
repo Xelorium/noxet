@@ -67,6 +67,76 @@ Measured with `test/benchmarks/notifier_benchmark_test.dart` (best of 5):
   `addAll`, `addEntries`, `update`, `updateAll`, `removeWhere` notify once
   instead of once per moved element / entry.
 
+Instances are keyed by a `(Type, String? tag)` record instead of a
+`'Type#tag'` string, so a lookup builds no string and hits the map once.
+Measured with `test/benchmarks/find_benchmark_test.dart` (best of 5):
+
+| Benchmark | Before | After |
+|---|---|---|
+| `Get.find<T>()` x 100000 | 34891us | 2212us |
+| `Get.find<T>(tag:)` x 100000 | 47997us | 2681us |
+| `GetView.controller` x 100000 | 35136us | 2537us |
+| `Get.isRegistered<T>()` x 100000 | 11327us | 1376us |
+| `Get.find<T>()` among 51 registrations x 100000 | 35104us | 2458us |
+
+Notifying the widgets of an `update()` no longer allocates closures per
+listener, and an element that is already marked for the next frame is skipped,
+so repeated `update()` calls between two frames are nearly free. Measured with
+`test/benchmarks/update_benchmark_test.dart` (best of 4 runs):
+
+| Benchmark | Before | After |
+|---|---|---|
+| `update()` notify 100 listeners x 10000 | 3478us | 2089us |
+| `update()` notify 1000 listeners x 10000 | 34783us | 21539us |
+| `update([id])` among 1000 ids x 10000 | 300us | 225us |
+| `update()` notify 20 mounted `GetBuilder`s x 10000 | 2126us | 539us |
+| `update()` notify 100 mounted `GetBuilder`s x 10000 | 10602us | 2626us |
+| mount + unmount 100 `GetBuilder`s x 50 | 33798us | 29910us |
+
+End to end (`update()` plus a real frame) shows no measurable change: that path
+is dominated by Flutter's build/layout/paint, not by this package.
+
+`Obx` and `GetX` keep their subscriptions across rebuilds instead of dropping
+and recreating every one of them, so a rebuild that reads the same observables
+touches no listener list and allocates nothing. Subscribing between
+notifications also extends the cached listener snapshot instead of discarding
+it. Measured with `test/benchmarks/tracking_benchmark_test.dart` (best of 4
+runs, per operation):
+
+| Benchmark | Before | After |
+|---|---|---|
+| tracked build reading 1 observable | 303ns | 53ns |
+| tracked build reading 5 observables | 1454ns | 207ns |
+| tracked build reading 20 observables | 5644ns | 748ns |
+| subscribe + notify interleaved, 100 listeners | 1493ns | 338ns |
+| subscribe + notify interleaved, 500 listeners | 5785ns | 804ns |
+| unsubscribe + notify interleaved, 500 listeners | 6181ns | 3460ns |
+
+`NotifyData` is superseded by `TrackedBuild`. It still works, but its
+`disposers` list now only holds the one-shot disposers (`Rx.bindStream`),
+because the subscriptions live in the tracker. Behaviour is unchanged: a
+conditional read still unsubscribes from the branch not taken, and unmounting
+still releases everything.
+
+### Added
+
+- `GetxController.updateAll([condition])` rebuilds every `GetBuilder` of the
+  controller, including the ones with an `id`, which `update()` does not
+  reach.
+- `GetInstanceNotFoundError`, thrown by `Get.find` when the type (or tag) is
+  not registered. Previously a plain `String` was thrown, so the failure
+  carried no stack trace. **Breaking** for code that caught the `String`.
+- A second `Get.put()` of an already registered type logs a warning in debug
+  mode. The existing instance is still kept and the new one discarded (as
+  before), but the discarded instance is never initialized or closed, which
+  used to be silent.
+
+### Changed
+
+- `GetBuilder`: `update()` called while the widget tree is being built now
+  defers the rebuild instead of throwing "setState() or markNeedsBuild()
+  called during build", matching what `Obx`/`GetX` already did.
+
 ## [5.0.0-release-candidate-9.3.3]
 
 Fix flutter 3.44.0

@@ -455,16 +455,13 @@ class BindElement<T> extends InheritedElement {
   void initState() {
     widget.initState?.call(this);
 
-    var isRegistered = Get.isRegistered<T>(tag: widget.tag);
-
     if (widget.global) {
-      if (isRegistered) {
-        if (Get.isPrepared<T>(tag: widget.tag)) {
-          _isCreator = true;
-        } else {
-          _isCreator = false;
-        }
+      // One registry lookup for both answers, instead of isRegistered()
+      // followed by isPrepared().
+      final info = Get.getInstanceInfo<T>(tag: widget.tag);
 
+      if (info.isRegistered) {
+        _isCreator = info.isPrepared;
         _controllerBuilder = () => Get.find<T>(tag: widget.tag);
       } else {
         _controllerBuilder =
@@ -588,9 +585,23 @@ class BindElement<T> extends InheritedElement {
     //);
   }
 
+  /// Marks this element dirty. Called from the controller's `update()`, which
+  /// may run while the tree is being built, so the rebuild is deferred in that
+  /// case (same handling as Obx/GetX).
   void getUpdate() {
+    // Already marked for the next frame: a second update() before that frame
+    // has nothing to do, and skipping keeps repeated updates cheap.
+    if (_dirty) return;
     _dirty = true;
-    markNeedsBuild();
+    if (isBuildingTree) {
+      scheduleMicrotask(_markNeedsBuildIfMounted);
+    } else {
+      markNeedsBuild();
+    }
+  }
+
+  void _markNeedsBuildIfMounted() {
+    if (mounted) markNeedsBuild();
   }
 
   @override

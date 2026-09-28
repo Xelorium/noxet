@@ -1,9 +1,16 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../get_core/get_core.dart';
 import 'lifecycle.dart';
+
+/// Key of a registration: the requested type plus the optional tag.
+///
+/// Records have structural equality, so this is used directly as the map key
+/// instead of building a `'Type#tag'` string on every lookup.
+typedef _InstKey = (Type, String?);
 
 class InstanceInfo {
   final bool? isPermanent;
@@ -49,7 +56,7 @@ extension Inst on GetInterface {
 
   /// Holds references to every registered Instance when using
   /// `Get.put()`
-  static final Map<String, _InstanceBuilderFactory> _singl = {};
+  static final Map<_InstKey, _InstanceBuilderFactory> _singl = {};
 
   /// Holds a reference to every registered callback when using
   /// `Get.lazyPut()`
@@ -78,6 +85,7 @@ extension Inst on GetInterface {
         isSingleton: true,
         name: tag,
         permanent: permanent,
+        warnIfRegistered: true,
         builder: (() => dependency));
     return find<S>(tag: tag);
   }
@@ -151,11 +159,21 @@ extension Inst on GetInterface {
     bool permanent = false,
     required InstanceBuilderCallback<S> builder,
     bool fenix = false,
+    bool warnIfRegistered = false,
   }) {
-    final key = _getKey(S, name);
+    final key = (S, name);
 
     final previous = _singl[key];
-    if (previous != null && !previous.isDirty) return;
+    if (previous != null && !previous.isDirty) {
+      if (warnIfRegistered && kDebugMode) {
+        Get.log(
+          // ignore: lines_longer_than_80_chars
+          '"${_keyLabel(key)}" is already registered; the existing instance is kept and the new one is discarded (it is never initialized nor closed). Use Get.replace() to swap it, or Get.delete() first.',
+          isError: true,
+        );
+      }
+      return;
+    }
 
     _singl[key] = _InstanceBuilderFactory<S>(
       isSingleton: isSingleton,
@@ -170,7 +188,7 @@ extension Inst on GetInterface {
     final previousInstance = previous?.dependency;
     if (previousInstance is GetLifeCycleMixin) {
       previousInstance.onDelete();
-      Get.log('"$key" onDelete() called');
+      if (Get.isLogEnable) Get.log('"${_keyLabel(key)}" onDelete() called');
     }
   }
 
@@ -183,74 +201,59 @@ extension Inst on GetInterface {
   /// (not for Singletons access).
   /// Returns the instance if not initialized, required for Get.create() to
   /// work properly.
-  S? _initDependencies<S>({String? name}) {
-    final key = _getKey(S, name);
-    final dep = _singl[key]!;
-    S? i;
-    if (!dep.isInit) {
-      final isSingleton = dep.isSingleton ?? false;
-      // Flag before starting so a `find` from inside `onInit` does not start
-      // the instance twice.
-      if (isSingleton) dep.isInit = true;
-      try {
-        i = _startController<S>(tag: name);
-      } catch (_) {
-        if (isSingleton) {
-          dep.isInit = false;
-          dep.dependency = null;
-        }
-        rethrow;
+  S? _initDependencies<S>(_InstanceBuilderFactory dep, {String? name}) {
+    if (dep.isInit) return null;
+    final isSingleton = dep.isSingleton ?? false;
+    // Flag before starting so a `find` from inside `onInit` does not start
+    // the instance twice.
+    if (isSingleton) dep.isInit = true;
+    try {
+      return _startController<S>(dep, tag: name);
+    } catch (_) {
+      if (isSingleton) {
+        dep.isInit = false;
+        dep.dependency = null;
       }
+      rethrow;
     }
-    return i;
   }
 
   InstanceInfo getInstanceInfo<S>({String? tag}) {
-    final build = _singl[_getKey(S, tag)];
+    final build = _singl[(S, tag)];
 
     return InstanceInfo(
       isPermanent: build?.permanent,
       isSingleton: build?.isSingleton,
-      isRegistered: isRegistered<S>(tag: tag),
+      isRegistered: build != null,
       isPrepared: !(build?.isInit ?? true),
       isInit: build?.isInit,
     );
-  }
-
-  _InstanceBuilderFactory? _getDependency<S>({String? tag, String? key}) {
-    final newKey = key ?? _getKey(S, tag);
-
-    if (!_singl.containsKey(newKey)) {
-      Get.log('Instance "$newKey" is not registered.', isError: true);
-      return null;
-    } else {
-      return _singl[newKey];
-    }
   }
 
   /// Marks the instance as replaceable: the next `put`/`lazyPut`/`spawn` of
   /// the same type (and tag) replaces this registration and closes the
   /// instance it held, instead of being ignored.
   void markAsDirty<S>({String? tag, String? key}) {
-    final newKey = key ?? _getKey(S, tag);
-    if (_singl.containsKey(newKey)) {
-      final dep = _singl[newKey];
-      if (dep != null && !dep.permanent) {
-        dep.isDirty = true;
-      }
+    final instKey = key != null ? _resolveLegacyKey(key) : (S, tag);
+    final dep = instKey == null ? null : _singl[instKey];
+    if (dep != null && !dep.permanent) {
+      dep.isDirty = true;
     }
   }
 
   /// Initializes the controller
-  S _startController<S>({String? tag}) {
-    final key = _getKey(S, tag);
-    final i = _singl[key]!.getDependency() as S;
+  S _startController<S>(_InstanceBuilderFactory dep, {String? tag}) {
+    final i = dep.getDependency() as S;
     if (i is GetLifeCycleMixin) {
       i.onStart();
-      if (tag == null) {
-        Get.log('Instance "$S" has been initialized');
-      } else {
-        Get.log('Instance "$S" with tag "$tag" has been initialized');
+      // Guarded: building these strings means a Type.toString() on every
+      // instantiation, which showed up in the page-open benchmark.
+      if (Get.isLogEnable) {
+        if (tag == null) {
+          Get.log('Instance "$S" has been initialized');
+        } else {
+          Get.log('Instance "$S" with tag "$tag" has been initialized');
+        }
       }
     }
     return i;
@@ -266,33 +269,28 @@ extension Inst on GetInterface {
   /// it will create an instance each time you call [find].
   /// If the registered type <[S]> (or [tag]) is a Controller,
   /// it will initialize it's lifecycle.
+  ///
+  /// Throws a [GetInstanceNotFoundError] if nothing is registered for <[S]>
+  /// (and [tag]).
   S find<S>({String? tag}) {
-    final key = _getKey(S, tag);
-    if (isRegistered<S>(tag: tag)) {
-      final dep = _singl[key];
-      if (dep == null) {
-        if (tag == null) {
-          throw 'Class "$S" is not registered';
-        } else {
-          throw 'Class "$S" with tag "$tag" is not registered';
-        }
-      }
-
-      /// although dirty solution, the lifecycle starts inside
-      /// `initDependencies`, so we have to return the instance from there
-      /// to make it compatible with `Get.create()`.
-      final i = _initDependencies<S>(name: tag);
-      return i ?? dep.getDependency() as S;
-    } else {
-      // ignore: lines_longer_than_80_chars
-      throw '"$S" not found. You need to call "Get.put($S())" or "Get.lazyPut(()=>$S())"';
+    // One map lookup: the record key needs no string to be built, and the
+    // registration is passed down instead of being looked up again.
+    final dep = _singl[(S, tag)];
+    if (dep == null) {
+      throw GetInstanceNotFoundError(type: S, tag: tag);
     }
+
+    /// although dirty solution, the lifecycle starts inside
+    /// `initDependencies`, so we have to return the instance from there
+    /// to make it compatible with `Get.create()`.
+    final i = _initDependencies<S>(dep, name: tag);
+    return i ?? dep.getDependency() as S;
   }
 
   /// The findOrNull method will return the instance if it is registered;
   /// otherwise, it will return null.
   S? findOrNull<S>({String? tag}) {
-    if (isRegistered<S>(tag: tag)) {
+    if (_singl.containsKey((S, tag))) {
       return find<S>(tag: tag);
     }
     return null;
@@ -323,12 +321,25 @@ extension Inst on GetInterface {
     lazyPut(builder, tag: tag, fenix: fenix ?? permanent);
   }
 
-  /// Generates the key based on [type] (and optionally a [name])
-  /// to register an Instance Builder in the hashmap.
+  /// The textual form of a registration key, used in logs and by the legacy
+  /// `key:` parameter of [delete] / [reload] / [markAsDirty].
   /// `#` never appears in a type name, so `Foo` + tag `Bar` and `FooBar`
   /// get different keys.
-  String _getKey(Type type, String? name) {
-    return name == null ? type.toString() : '$type#$name';
+  static String _stringKey(Type type, String? name) =>
+      name == null ? type.toString() : '$type#$name';
+
+  static String _keyLabel(_InstKey key) => _stringKey(key.$1, key.$2);
+
+  /// Resolves a `'Type#tag'` string back to its registration key.
+  ///
+  /// Only used by the `key:` parameter of [delete] / [reload] /
+  /// [markAsDirty], documented as internal; the scan is over the
+  /// registrations, and the hot paths ([find], [isRegistered]) never take it.
+  static _InstKey? _resolveLegacyKey(String key) {
+    for (final candidate in _singl.keys) {
+      if (_keyLabel(candidate) == key) return candidate;
+    }
+    return null;
   }
 
   /// Delete registered Class Instance [S] (or [tag]) and, closes any open
@@ -348,21 +359,24 @@ extension Inst on GetInterface {
   ///   the Instance. **don't use** it unless you know what you are doing.
   /// - [force] Will delete an Instance even if marked as `permanent`.
   bool delete<S>({String? tag, String? key, bool force = false}) {
-    final newKey = key ?? _getKey(S, tag);
+    final instKey = key != null ? _resolveLegacyKey(key) : (S, tag);
+    final builder = instKey == null ? null : _singl[instKey];
 
-    if (!_singl.containsKey(newKey)) {
-      Get.log('Instance "$newKey" already removed.', isError: true);
+    if (builder == null) {
+      Get.log('Instance "${key ?? _stringKey(S, tag)}" already removed.',
+          isError: true);
       return false;
     }
 
-    final builder = _singl[newKey];
+    return _delete(instKey!, builder, force: force);
+  }
 
-    if (builder == null) return false;
-
+  bool _delete(_InstKey key, _InstanceBuilderFactory builder,
+      {bool force = false}) {
     if (builder.permanent && !force) {
       Get.log(
         // ignore: lines_longer_than_80_chars
-        '"$newKey" has been marked as permanent, SmartManagement is not authorized to delete it.',
+        '"${_keyLabel(key)}" has been marked as permanent, SmartManagement is not authorized to delete it.',
         isError: true,
       );
       return false;
@@ -375,16 +389,16 @@ extension Inst on GetInterface {
 
     if (i is GetLifeCycleMixin) {
       i.onDelete();
-      Get.log('"$newKey" onDelete() called');
+      if (Get.isLogEnable) Get.log('"${_keyLabel(key)}" onDelete() called');
     }
 
     if (builder.fenix) {
       builder.dependency = null;
       builder.isInit = false;
     } else {
-      _singl.remove(newKey);
+      _singl.remove(key);
     }
-    Get.log('"$newKey" deleted from memory');
+    if (Get.isLogEnable) Get.log('"${_keyLabel(key)}" deleted from memory');
     return true;
   }
 
@@ -393,17 +407,16 @@ extension Inst on GetInterface {
   ///
   /// - [force] Will delete the Instances even if marked as `permanent`.
   void deleteAll({bool force = false}) {
-    final keys = _singl.keys.toList();
-    for (final key in keys) {
-      delete(key: key, force: force);
+    for (final entry in _singl.entries.toList()) {
+      _delete(entry.key, entry.value, force: force);
     }
   }
 
   /// Closes every instance (see [reload]) so it is recreated by its builder
   /// on the next [find].
   void reloadAll({bool force = false}) {
-    for (final key in _singl.keys.toList()) {
-      reload(key: key, force: force);
+    for (final entry in _singl.entries.toList()) {
+      _reload(entry.key, entry.value, force: force);
     }
   }
 
@@ -412,14 +425,22 @@ extension Inst on GetInterface {
     String? key,
     bool force = false,
   }) {
-    final newKey = key ?? _getKey(S, tag);
+    final instKey = key != null ? _resolveLegacyKey(key) : (S, tag);
+    final builder = instKey == null ? null : _singl[instKey];
+    if (builder == null) {
+      Get.log('Instance "${key ?? _stringKey(S, tag)}" is not registered.',
+          isError: true);
+      return;
+    }
 
-    final builder = _getDependency<S>(tag: tag, key: newKey);
-    if (builder == null) return;
+    _reload(instKey!, builder, force: force);
+  }
 
+  void _reload(_InstKey key, _InstanceBuilderFactory builder,
+      {bool force = false}) {
     if (builder.permanent && !force) {
       Get.log(
-        '''Instance "$newKey" is permanent. Use [force = true] to force the restart.''',
+        '''Instance "${_keyLabel(key)}" is permanent. Use [force = true] to force the restart.''',
         isError: true,
       );
       return;
@@ -433,24 +454,47 @@ extension Inst on GetInterface {
 
     if (i is GetLifeCycleMixin) {
       i.onDelete();
-      Get.log('"$newKey" onDelete() called');
+      if (Get.isLogEnable) Get.log('"${_keyLabel(key)}" onDelete() called');
     }
 
     builder.dependency = null;
     builder.isInit = false;
-    Get.log('Instance "$newKey" was restarted.');
+    if (Get.isLogEnable) Get.log('Instance "${_keyLabel(key)}" was restarted.');
   }
 
   /// Check if a Class Instance<[S]> (or [tag]) is registered in memory.
   /// - [tag] is optional, if you used a [tag] to register the Instance.
-  bool isRegistered<S>({String? tag}) => _singl.containsKey(_getKey(S, tag));
+  bool isRegistered<S>({String? tag}) => _singl.containsKey((S, tag));
 
   /// Checks if a lazy factory callback `Get.lazyPut()` that returns an
   /// Instance<[S]> is registered in memory.
   /// - [tag] is optional, if you used a [tag] to register the lazy Instance.
   bool isPrepared<S>({String? tag}) {
-    final builder = _singl[_getKey(S, tag)];
+    final builder = _singl[(S, tag)];
     return builder != null && !builder.isInit;
+  }
+}
+
+/// Thrown by [Inst.find] when the requested type (optionally with a [tag])
+/// has not been registered with `Get.put()`, `Get.lazyPut()` or `Get.spawn()`.
+///
+/// Being an [Error], it carries the [stackTrace] of the failed lookup.
+class GetInstanceNotFoundError extends Error {
+  GetInstanceNotFoundError({required this.type, this.tag});
+
+  /// The type that was looked up.
+  final Type type;
+
+  /// The tag it was looked up with, if any.
+  final String? tag;
+
+  @override
+  String toString() {
+    final target = tag == null ? '"$type"' : '"$type" with tag "$tag"';
+    final tagArg = tag == null ? '' : ', tag: "$tag"';
+    return '[Get] $target is not registered. '
+        'Call "Get.put($type()$tagArg)" or '
+        '"Get.lazyPut(() => $type()$tagArg)" before using it.';
   }
 }
 
@@ -501,6 +545,7 @@ class _InstanceBuilderFactory<S> {
   });
 
   void _showInitLog() {
+    if (!Get.isLogEnable) return;
     if (tag == null) {
       Get.log('Instance "$S" has been created');
     } else {

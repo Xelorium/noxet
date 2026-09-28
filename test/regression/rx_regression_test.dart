@@ -79,12 +79,11 @@ void main() {
 
     test('setting the value does not subscribe the current observer', () {
       final value = 0.obs;
-      final disposers = <Disposer>[];
       Notifier.instance.append(
-        NotifyData(updater: () {}, disposers: disposers, throwException: false),
+        TrackedBuild(updater: () {}, throwException: false),
         () => value.value = 1,
       );
-      expect(disposers, isEmpty);
+      expect(value.listenersLength, 0);
     });
 
     test('stream can be listened to again after the last cancel', () async {
@@ -141,7 +140,7 @@ void main() {
       final value = 0.obs;
       expect(
         () => Notifier.instance.append(
-          NotifyData(updater: () {}, disposers: []),
+          TrackedBuild(updater: () {}),
           () => throw StateError('boom'),
         ),
         throwsStateError,
@@ -152,10 +151,99 @@ void main() {
       expect(value.listenersLength, 0);
     });
 
+    test('a subscription is kept across builds of the same tracker', () {
+      final value = 0.obs;
+      final tracked = TrackedBuild(updater: () {});
+
+      Notifier.instance.append(tracked, () => value.value);
+      expect(value.listenersLength, 1);
+      expect(tracked.subscriptionCount, 1);
+
+      // Rebuilding no longer unsubscribes and resubscribes.
+      Notifier.instance.append(tracked, () => value.value);
+      expect(value.listenersLength, 1);
+      expect(tracked.subscriptionCount, 1);
+
+      tracked.dispose();
+      expect(value.listenersLength, 0);
+    });
+
+    test('reading the same observable twice in one build subscribes once', () {
+      final value = 0.obs;
+      final tracked = TrackedBuild(updater: () {});
+      final other = 0.obs;
+
+      Notifier.instance.append(tracked, () {
+        value.value;
+        other.value;
+        value.value; // interleaved, so the `_lastRead` shortcut does not apply
+      });
+
+      expect(value.listenersLength, 1);
+      expect(other.listenersLength, 1);
+      expect(tracked.subscriptionCount, 2);
+      tracked.dispose();
+    });
+
+    test('an observable not read by the last build is unsubscribed', () {
+      final a = 0.obs;
+      final b = 0.obs;
+      final tracked = TrackedBuild(updater: () {});
+
+      Notifier.instance.append(tracked, () {
+        a.value;
+        b.value;
+      });
+      expect(tracked.subscriptionCount, 2);
+
+      Notifier.instance.append(tracked, () => a.value);
+      expect(a.listenersLength, 1);
+      expect(b.listenersLength, 0);
+      expect(tracked.subscriptionCount, 1);
+      tracked.dispose();
+    });
+
+    test('a build that reads nothing keeps the previous subscriptions', () {
+      final value = 0.obs;
+      final tracked = TrackedBuild(updater: () {}, throwException: false);
+
+      Notifier.instance.append(tracked, () => value.value);
+      expect(value.listenersLength, 1);
+
+      // Reads nothing: ObxError is off here, and the sweep drops the
+      // subscription because it was not read.
+      Notifier.instance.append(tracked, () => 0);
+      expect(value.listenersLength, 0);
+      tracked.dispose();
+    });
+
+    test('bindStream disposers only live for one build', () async {
+      final source = StreamController<int>.broadcast();
+      final value = 0.obs;
+      final tracked = TrackedBuild(updater: () {});
+
+      Notifier.instance.append(tracked, () {
+        value.value;
+        value.bindStream(source.stream);
+      });
+      expect(tracked.extraDisposers, hasLength(1));
+
+      // The next build cancels the previous bindStream subscription.
+      Notifier.instance.append(tracked, () => value.value);
+      expect(tracked.extraDisposers, isEmpty);
+
+      source.add(5);
+      await Future<void>.delayed(Duration.zero);
+      expect(value.value, 0, reason: 'the stream was unbound');
+
+      tracked.dispose();
+      await source.close();
+    });
+
     test('throws the exported ObxError when nothing is observed', () {
       expect(
         () => Notifier.instance.append(
-          NotifyData(updater: () {}, disposers: []),
+          TrackedBuild(updater: () {}),
           () => 0,
         ),
         throwsA(isA<ObxError>()),

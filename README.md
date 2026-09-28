@@ -100,7 +100,9 @@ ObxValue<RxBool>(
 # Simple state
 
 Call `update()` in a `GetxController` to rebuild every `GetBuilder` of that
-controller (or only the ones with a given `id`).
+controller (or only the ones with a given `id`). `update()` does **not** reach
+the `GetBuilder`s that were given an `id`; use `updateAll()` to rebuild both
+the id-less and the id-ed ones.
 
 ```dart
 class TodoController extends GetxController {

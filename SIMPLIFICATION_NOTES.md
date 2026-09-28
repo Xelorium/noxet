@@ -2,13 +2,15 @@
 
 Bu fork (GetX 5 RC tabanlı) yalnızca **state management + dependency injection**
 kalacak şekilde sadeleştirildi, ardından bulunan bug'lar düzeltildi ve
-performans iyileştirildi. Değişiklikler üç ayrı commit halinde:
+performans iyileştirildi. Değişiklikler ayrı commit'ler halinde:
 
 | Aşama | Commit | Konu |
 |---|---|---|
 | 1 | `d7a258f` | Paketin sadeleştirilmesi |
 | 2 | `3189261` | Bug fix'ler + regresyon testleri |
 | 3 | `a7e67f3` | Performans + benchmark |
+| 4 | — | GetBuilder / Get.find iyileştirmeleri |
+| 5 | — | Obx/GetX takip maliyeti, listener snapshot'ı |
 
 İngilizce özet için `CHANGELOG.md` içindeki `[Unreleased]` bölümüne bakın.
 
@@ -158,6 +160,17 @@ Tek listener'lı bildirimde anlamlı fark yok.
 - `RxObjectMixin.firstRebuild` ve `sentToStream` iç alanları kaldırıldı.
 - Obx güncellemesi build sırasında değilse hemen işleniyor (önceden hep bir
   microtask sonraya kalıyordu).
+- `Get.find` kayıtsız tip için `String` yerine `GetInstanceNotFoundError`
+  fırlatıyor (Aşama 4).
+- `GetBuilder`'ın güncellemesi build sırasında geldiğinde erteleniyor
+  (Aşama 4).
+- Aynı tipe ikinci `Get.put` debug modda uyarı logluyor (Aşama 4).
+- `Obx`/`GetX` abonelikleri rebuild'ler arasında korunuyor; yalnızca son
+  build'de okunmayanlar bırakılıyor (Aşama 5). Gözlemlenebilir semantik aynı,
+  ama bir Rx'in listener sırası artık her rebuild'de değişmiyor.
+- `NotifyData` yerini `TrackedBuild`'e bıraktı; eski API uyumluluk için
+  duruyor ama `disposers` artık yalnızca tek-seferlik disposer'ları tutuyor
+  (Aşama 5).
 
 **Bilinçli olarak korunanlar:** Rx koleksiyonlar hiçbir şey değişmese de
 bildirim göndermeye devam ediyor (mevcut bir test bu davranışı bekliyor);
@@ -167,19 +180,215 @@ bildirim göndermeye devam ediyor (mevcut bir test bu davranışı bekliyor);
 
 - Flutter 3.44.1 (CI ile aynı sürüm).
 - `flutter analyze`: sorun yok.
-- `flutter test`: 87 test geçiyor; `example/` testi geçiyor.
+- `flutter test`: 137 test geçiyor; `example/` 7 testi geçiyor.
+- Aşama 4'ün regresyon testleri düzeltmelerden önceki kodda başarısız oluyor:
+  üç "update during build" testi `markNeedsBuild during build` hatası,
+  `updateAll` testleri derlenmiyor (metot yok), `refreshGroupAll`'un snapshot'ı
+  kaldırılınca `ConcurrentModificationError`.
 
-## Sonraki adım önerileri (GetBuilder / Get.find odaklı)
+## Aşama 4 — GetBuilder / Get.find iyileştirmeleri
 
-1. Build sırasında `update()` çağrılınca `GetBuilder` "setState during build"
-   hatası veriyor; Obx/GetX'teki ertelemenin aynısı uygulanmalı.
-2. `Get.find` bulamazsa düz `String` fırlatıyor; tipli bir `Error`
-   (stack trace ile) olmalı.
-3. Aynı tipe ikinci `Get.put` sessizce yok sayılıyor ve ikinci instance
-   hiç başlatılmıyor/kapatılmıyor; debug modda uyarı verilmeli.
-4. `Get.find` çağrı başına yaklaşık 410 ns (tag'li ~550 ns); her çağrıda
-   string anahtar üretiliyor ve kayıt 3–4 kez aranıyor. `(Type, String?)`
-   anahtarı ve tek aramayla hızlandırılabilir; `GetView.controller` her
-   erişimde `Get.find` çağırdığı için bu build içinde de hissediliyor.
-5. `update()` id'li `GetBuilder`'ları güncellemiyor; hepsini güncelleyen
-   ayrı bir `updateAll()` eklenebilir.
+Bir önceki sürümdeki "sonraki adım önerileri"nin beşi de uygulandı. Her
+düzeltmenin `test/regression/` altında testi var; `Get.find` için
+`test/benchmarks/find_benchmark_test.dart` eklendi.
+
+### 1. Build sırasında `update()`
+
+`BindElement.getUpdate()` doğrudan `markNeedsBuild()` çağırıyordu, bu da
+build sırasında "setState() or markNeedsBuild() called during build" hatası
+veriyordu. Artık Obx/GetX'in kullandığı `scheduleRebuild()` üzerinden
+geçiyor: build fazındaysa rebuild bir microtask'a erteleniyor ve o an widget
+hâlâ mount'luysa uygulanıyor.
+
+### 2. `Get.find` için tipli hata
+
+Kayıtsız tip için düz `String` yerine `GetInstanceNotFoundError` fırlatılıyor.
+`Error` alt sınıfı olduğu için stack trace taşıyor; `type` ve `tag` alanları
+programatik olarak okunabiliyor. **Breaking:** eski `String`'i yakalayan kod
+etkilenir (paket içinde iki test güncellendi).
+
+### 3. Aynı tipe ikinci `Get.put` uyarısı
+
+Davranış aynı kaldı (ilk instance korunuyor, ikincisi atılıyor) ama artık
+debug modda `isError: true` ile log basılıyor; atılan nesnenin hiç
+başlatılmadığı/kapatılmadığı sessizce geçmiyor. `Get.lazyPut`'un tekrarı
+GetX'te dokümante edilmiş kasıtlı bir no-op olduğu için orada uyarı yok.
+
+### 4. `Get.find` hızlandırma
+
+Kayıtlar artık `'Tip#tag'` string'i yerine `(Type, String? tag)` record'u ile
+anahtarlanıyor. Record'lar yapısal `==`/`hashCode` taşıdığı için çağrı başına
+string üretimi tamamen kalktı; `find` ayrıca kaydı 3–4 kez aramak yerine tek
+kez arayıp `_InstanceBuilderFactory`'yi aşağıya parametre olarak geçiyor
+(`_initDependencies`, `_startController`). `delete`/`reload`/`markAsDirty`'nin
+dokümante olarak dahili `key:` parametresi uyumluluk için duruyor: verilen
+string, kayıtlar üzerinde taranarak çözülüyor (sıcak yollar bu tarafa hiç
+girmiyor). `deleteAll`/`reloadAll` doğrudan record anahtarlarını kullanıyor.
+
+`test/benchmarks/find_benchmark_test.dart` ile ölçüm ("önce" = Aşama 2,
+`3189261`; 3 çalıştırma × 5 iç tekrarın en iyisi, test modunda):
+
+| Ölçüm | Önce | Sonra | Kazanç |
+|---|---|---|---|
+| `Get.find<T>()` × 100 000 | 34891 µs (349 ns/çağrı) | 2212 µs (22 ns) | 15,8× |
+| `Get.find<T>(tag:)` × 100 000 | 47997 µs (480 ns) | 2681 µs (27 ns) | 17,9× |
+| `GetView.controller` × 100 000 | 35136 µs (351 ns) | 2537 µs (25 ns) | 13,8× |
+| `Get.isRegistered<T>()` × 100 000 | 11327 µs (113 ns) | 1376 µs (14 ns) | 8,2× |
+| 51 kayıt arasından `Get.find<T>()` × 100 000 | 35104 µs (351 ns) | 2458 µs (25 ns) | 14,3× |
+
+Tag'li çağrı daha çok kazanıyor: eskiden `'Tip#tag'` interpolation'ı çağrı
+başına 3–4 kez yapılıyordu, artık hiç yapılmıyor.
+
+### 5. `updateAll()`
+
+`update()` id'li `GetBuilder`'ları güncellemiyor (orijinal GetX davranışı,
+bilinçli korundu). Yeni `GetxController.updateAll([condition])` hem id'siz
+listener'ları hem de bütün id gruplarını bildiriyor. Altında
+`ListNotifierGroupMixin.refreshGroupAll()` var; grup map'i bildirim sırasında
+bir listener tarafından değiştirilebildiği için (`disposeId`) snapshot
+üzerinde geziliyor ve kapatılmış gruplar atlanıyor.
+
+### 6. `update()` ve `GetBuilder` maliyeti
+
+Madde 1'in ilk hali her bildirimde `scheduleRebuild(markNeedsBuild, () =>
+mounted)` çağırıyordu; iki closure allocation'ı mount edilmiş `GetBuilder`'ları
+bildirme yolunu **2,3× yavaşlatmıştı**. Ölçüm bunu yakaladı ve düzeltildi:
+
+- `scheduleRebuild(cb, cb)` yardımcısı yerine `isBuildingTree` getter'ı; her
+  çağıran kendi dalını yazıyor, yani yaygın (build dışı) yolda closure
+  allocate edilmiyor. `Obx`/`GetX` de aynı desene geçti.
+- `BindElement.getUpdate` zaten `_dirty` ise hemen dönüyor; `ObxElement` de
+  `dirty` ise. İki frame arasındaki tekrarlı `update()` çağrıları ek iş
+  yapmıyor (davranış aynı: yine tek rebuild, son değerle).
+
+`test/benchmarks/update_benchmark_test.dart` ile ölçüm ("önce" = Aşama 2;
+4 çalıştırma × 5 iç tekrarın en iyisi):
+
+| Ölçüm | Önce | Sonra | Kazanç |
+|---|---|---|---|
+| `update()` → 1 listener'a bildirim × 10 000 | 115 µs | 107 µs | 1,07× |
+| `update()` → 100 listener × 10 000 | 3478 µs | 2089 µs | 1,66× |
+| `update()` → 1000 listener × 10 000 | 34783 µs | 21539 µs | 1,61× |
+| 1000 id arasından `update([id])` × 10 000 | 300 µs | 225 µs | 1,33× |
+| `update()` → 1 mount'lu GetBuilder'a bildirim × 10 000 | 164 µs | 86 µs | 1,91× |
+| `update()` → 20 mount'lu GetBuilder × 10 000 | 2126 µs | 539 µs | 3,94× |
+| `update()` → 100 mount'lu GetBuilder × 10 000 | 10602 µs | 2626 µs | 4,04× |
+| `update()` → 1 GetBuilder rebuild (pump) × 200 | 14398 µs | 13776 µs | 1,05× |
+| `update()` → 20 GetBuilder rebuild × 200 | 16649 µs | 16707 µs | 1,00× |
+| `update()` → 100 GetBuilder rebuild × 200 | 88316 µs | 87048 µs | 1,01× |
+| `update([id])` → 100'ün 1'i rebuild × 200 | 7118 µs | 7145 µs | 1,00× |
+| 1 GetBuilder mount + unmount × 50 | 13724 µs | 13884 µs | 0,99× |
+| 100 GetBuilder mount + unmount × 50 | 33798 µs | 29910 µs | 1,13× |
+| 100 id'li GetBuilder mount + unmount × 50 | 28404 µs | 27319 µs | 1,04× |
+
+Okurken dikkat: **rebuild'i içeren satırlar (pump'lı olanlar) ölçüm
+gürültüsünün altında.** Aynı kodu tekrar tekrar çalıştırdığımda bu satırlar
+%50–100 arası oynuyor (ör. "1 GetBuilder rebuild" 14094–28905 µs), çünkü
+maliyeti Flutter'ın build/layout/paint hattı belirliyor, paketin payı değil.
+Bu yüzden 1,00× civarındaki değerleri "fark yok" olarak okumak gerekir, ölçülen
+bir eşitlik olarak değil. Paketin kendi payını izole eden satırlar
+pump'sız olanlar.
+
+Özet: kazanç listener sayısıyla ölçekleniyor. Controller'a tek `GetBuilder`
+bağlıysa fark yok denecek kadar az; kalabalık ekranlarda (20–100 abone) 2–4×;
+uçtan uca kare süresinde fark ölçülemiyor çünkü orada baskın maliyet Flutter'ın
+kendisi.
+
+## Aşama 5 — Obx/GetX takip maliyeti ve listener snapshot'ı
+
+Aşama 4'ten sonra kalan maliyeti keşif amaçlı mikro-benchmark'larla arayınca
+en büyük paket kaynaklı kalem çıktı: **takip edilen (Obx/GetX) bir build'in
+maliyetinin %77'si**, her rebuild'de bütün abonelikleri bırakıp yeniden
+kurmaktan geliyordu. Bir Obx sürekli aynı observable'ları okuduğu için bu
+tamamen boşa iş: okuma başına bir closure allocation + iki map mutasyonu.
+
+### A. Abonelikler artık rebuild'ler arasında yaşıyor
+
+`Obx`/`GetX` her build'de `disposers` listesini boşaltıp yeniden dolduruyordu.
+Yerine yeni `TrackedBuild` sınıfı (`list_notifier.dart`) kuşak damgalı
+işaretle-ve-süpür yapıyor: build sırasında okunan her observable o build'in
+kuşağıyla damgalanıyor, build sonunda yalnızca damgalanmamış olanların
+aboneliği bırakılıyor. Sürekli durumda (aynı observable'lar tekrar okunuyor)
+hiçbir listener listesine dokunulmuyor ve hiç allocation yapılmıyor;
+`endBuild` tek bir int karşılaştırmasıyla çıkıyor.
+
+Davranış aynı kalıyor: koşullu okumada artık okunmayan Rx'in aboneliği yine
+bırakılıyor, unmount'ta hepsi bırakılıyor, `Rx.bindStream` disposer'ı yine tek
+build ömürlü (`extraDisposers`), builder hata fırlatırsa takip durumu yine
+temizleniyor.
+
+`_subscriptions` **kimlik tabanlı** (`HashMap.identity()`) olmak zorunda:
+`Rx` `==`/`hashCode`'u değeri üzerinden override ediyor ve değeri okumak
+yeni bir "okundu" bildirimi tetiklediği için normal bir map, anahtarı ararken
+`markRead`'e geri özyineleniyor ve stack overflow veriyor. Bunu
+`rx_regression_test.dart` içindeki "reading the same observable twice in one
+build subscribes once" testi yakaladı; kimlik map'i kaldırılınca test yine
+yığın taşmasıyla düşüyor.
+
+### B. Listener snapshot'ı artımlı güncelleniyor
+
+`_Listeners.add` her abonelikte önbelleğe alınmış snapshot'ı atıyordu, yani
+bir sonraki bildirim listeyi baştan kuruyordu. Artık bildirim sürmüyorsa
+snapshot'a doğrudan ekleniyor (O(1)). Bildirim sırasında gelen abonelikler
+snapshot'ı geçersiz kılıyor ama uçuştaki döngü kendi yerel referansını
+kullandığı için "listener'lar bildirim sırasında abone olabilir/çıkabilir"
+garantisi korunuyor (`_notifying` sayacı iç içe bildirimleri de doğru
+sayıyor). Silmede snapshot hâlâ atılıyor (silme seyrek).
+
+### C. `GetBuilder` mount'unda kayıt araması 3 → 2
+
+`BindElement.initState` `Get.isRegistered` + `Get.isPrepared` yerine mevcut
+`Get.getInstanceInfo`'yu kullanıyor (tek aramada iki cevap; `get_view.dart`
+zaten böyle yapıyordu). Ölçülebilir bir fark vermiyor, aşağıdaki mount satırı
+gürültünün içinde kalıyor.
+
+### Ölçüm
+
+`test/benchmarks/tracking_benchmark_test.dart` ("önce" = Aşama 3, `a7e67f3`;
+4 çalıştırma × 5 iç tekrarın en iyisi). Harness her iki ağaçta da o ağacın
+`Obx`'inin gerçekten yaptığı şeyi modelliyor: takip durumu element gibi
+build'ler arasında yaşıyor, her build tek-seferlik disposer'ları boşaltıyor.
+
+| Ölçüm | Önce | Sonra | Kazanç |
+|---|---|---|---|
+| 1 observable okuyan takipli build | 303 ns | 53 ns | **5,7×** |
+| 5 observable okuyan takipli build | 1454 ns | 207 ns | **7,0×** |
+| 20 observable okuyan takipli build | 5644 ns | 748 ns | **7,6×** |
+| 50 elemanlı RxList okuyan takipli build | 576 ns | 586 ns | 0,98× |
+| 10 listener'a kadar iç içe abone olma + bildirim | 460 ns | 247 ns | 1,9× |
+| 100 listener'a kadar | 1493 ns | 338 ns | **4,4×** |
+| 500 listener'a kadar | 5785 ns | 804 ns | **7,2×** |
+| 10 listener'dan iç içe abonelik bırakma + bildirim | 582 ns | 474 ns | 1,2× |
+| 100 listener'dan | 1676 ns | 1030 ns | 1,6× |
+| 500 listener'dan | 6181 ns | 3460 ns | 1,8× |
+
+RxList satırının değişmemesi beklenen: `_lastRead` kısayolu aynı Rx'in
+tekrarlı okunmasını zaten tek aboneliğe indiriyordu, yani orada churn hiç
+yoktu.
+
+Dürüst ölçek: 100 Obx'li bir ekran için kare başına ~26 µs, 16,6 ms bütçenin
+%0,16'sı. Asıl fayda throughput değil, kare başına yüzlerce closure ve map
+mutasyonunun kalkması (GC baskısı / jank).
+
+Not: "iç içe abone olma + bildirim" ölçümü yapısı gereği O(n²) (n kez bildirim
+× büyüyen n listener); B o maliyetin üstündeki sabit çarpanı kaldırıyor,
+asimptotu değiştirmiyor.
+
+### Örnek uygulama
+
+`example/lib/phase4_demo.dart` beş maddeyi elle denemek için ayrı bir sayfa
+(`Phase4DemoPage`, ana sayfadaki "GetBuilder / Get.find demo" butonundan):
+build içinde `update()` çağıran bir `GetBuilder`, `GetInstanceNotFoundError`'ın
+`type`/`tag`/stack trace'ini gösteren buton, ikinci `Get.put`'un yakalanmış
+uyarı logu, cihaz üzerinde 100 000 `Get.find` ölçümü ve build sayaçlarıyla
+`update()` / `update(['a'])` / `updateAll()` karşılaştırması. Testi
+`example/test/phase4_demo_test.dart`.
+
+`flutter run` ile denerken 4. maddenin sayılarını release modda
+(`flutter run --release`) okuyun; debug modda VM yavaş olduğu için paket
+benchmark'ından çok yüksek çıkar.
+
+### Ek
+
+`test/instance/util/matcher.dart` (vendor'lanmış `TypeMatcher` kopyası) son
+kullanıcısı madde 2 ile `isA<...>()`'e geçince kaldırıldı.
