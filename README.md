@@ -10,7 +10,10 @@ management code keeps working.
 What is included:
 
 - Reactive state: `.obs`, `Rx<T>`, `RxList`, `RxMap`, `RxSet`, `Obx`, `ObxValue`, `GetX`
-- Simple state: `GetxController.update()`, `GetBuilder`, `ValueBuilder`
+- Simple state: `GetxController.update()`, `updateAll()`, `GetBuilder`,
+  `ValueBuilder`
+- Page states: `PageStateMixin`, `PageState` (loading / empty / error / data /
+  your own), `PageStateView`, `PageSectionView`
 - Async state: `StateMixin`, `GetStatus`, `futurize`, `obx()`
 - Workers: `ever`, `once`, `debounce`, `interval`, `everAll`
 - Dependency injection: `Get.put`, `Get.lazyPut`, `Get.putAsync`, `Get.create`,
@@ -21,6 +24,7 @@ What is included:
 - [Counter example](#counter-example)
 - [Reactive state](#reactive-state)
 - [Simple state](#simple-state)
+- [Page states](#page-states)
 - [StateMixin](#statemixin)
 - [Workers](#workers)
 - [Dependency injection](#dependency-injection)
@@ -129,6 +133,65 @@ ValueBuilder<bool>(
   builder: (value, update) => Switch(value: value, onChanged: update),
 );
 ```
+
+# Page states
+
+`PageStateMixin` gives a controller the loading / empty / error / data states a
+page goes through, driven by `update()` so it works with `GetBuilder` rather
+than `Obx`. States are a sealed hierarchy, so a `switch` over them is
+exhaustive, and `PageCustomState` is the extension point for states of your
+own.
+
+```dart
+class ArticlesController extends GetxController
+    with PageStateMixin<List<Article>> {
+  /// Loads on its own; update(['comments']) rebuilds only this section.
+  late final comments = section<List<Comment>>('comments');
+
+  @override
+  void onInit() {
+    super.onInit();
+    load(() => api.articles());
+    comments.load(() => api.comments());
+  }
+}
+
+PageStateView<ArticlesController, List<Article>>(
+  init: ArticlesController(),
+  onData: (context, articles) => ArticleList(articles),
+  onEmpty: (context, state) => const Text('Nothing here yet'),
+  onFailure: (context, state) => RetryBox(onTap: controller.retry),
+);
+```
+
+`load()` moves through `PageLoading` to `PageData`, `PageEmpty` or
+`PageFailure`, drops the result of a call that a newer one superseded, and
+`retry()` replays the last one. `keepDataWhileLoading: true` keeps the current
+list on screen for a pull-to-refresh, and `mapState:` lets a load end in a
+state of your own.
+
+Define extra states by extending `PageCustomState`:
+
+```dart
+final class Paywalled extends PageCustomState<List<Article>> {
+  const Paywalled(this.remaining);
+  final int remaining;
+}
+
+switch (controller.state) {
+  Paywalled(:final remaining) => Paywall(remaining),  // before the broad case
+  PageCustomState() => const SizedBox.shrink(),
+  PageData(:final value) => ArticleList(value),
+  PageLoading() => const Spinner(),
+  PageIdle() || PageEmpty() => const EmptyView(),
+  PageFailure(:final error) => ErrorView(error),
+}
+```
+
+> Do not name a controller method `refresh()`. `GetxController` already has
+> one and `update()` calls it; because `void` is a top type in Dart, even
+> `Future<void> refresh()` silently overrides it and every state change
+> re-enters your method. Use `refreshData()` or similar.
 
 # StateMixin
 

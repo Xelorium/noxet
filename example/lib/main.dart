@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import 'init_benchmark.dart';
+import 'page_state_demo.dart';
 import 'phase4_demo.dart';
 
 void main() {
@@ -131,6 +132,14 @@ class HomePage extends StatelessWidget {
               ),
             ),
             child: const Text('Page open benchmark'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const PageStateDemoPage(),
+              ),
+            ),
+            child: const Text('Page state demo'),
           ),
         ],
       ),

@@ -120,6 +120,25 @@ still releases everything.
 
 ### Added
 
+- Page states for the `GetBuilder` + `update()` flow, exported from
+  `package:get/get.dart`:
+  - `PageState<T>`, a sealed hierarchy of `PageIdle`, `PageLoading`,
+    `PageEmpty`, `PageFailure`, `PageData` and `PageCustomState`, the last of
+    which is `base` so your own states can extend it while a `switch` stays
+    exhaustive.
+  - `PageStateMixin<T>` on `GetxController`: a page state notified with
+    `update()`, plus `section(id)` states notified with `update([id])` so
+    parts of a page load independently.
+  - `PageStateHolder<T>.load()`, which moves through loading to data, empty or
+    failure, ignores the result of a superseded call, catches synchronous
+    throws, and supports `retry()`, `keepDataWhileLoading:` and `mapState:`.
+  - `PageStateView` and `PageSectionView`, `GetBuilder`-based widgets (no
+    `Obx`), with `PageStateDefaults` for app-wide loading/empty/error
+    fallbacks.
+  - The holder throws a `FlutterError` when notifications nest 20 deep, which
+    catches the common trap of declaring a `refresh()` on a controller: `void`
+    is a top type, so it silently overrides `ListNotifier.refresh()` that
+    `update()` calls, and the page would otherwise freeze.
 - `GetxController.updateAll([condition])` rebuilds every `GetBuilder` of the
   controller, including the ones with an `id`, which `update()` does not
   reach.

@@ -11,6 +11,7 @@ performans iyileştirildi. Değişiklikler ayrı commit'ler halinde:
 | 3 | `a7e67f3` | Performans + benchmark |
 | 4 | — | GetBuilder / Get.find iyileştirmeleri |
 | 5 | — | Obx/GetX takip maliyeti, listener snapshot'ı |
+| 6 | — | Sayfa state toolkit'i (PageState / PageStateMixin) |
 
 İngilizce özet için `CHANGELOG.md` içindeki `[Unreleased]` bölümüne bakın.
 
@@ -146,45 +147,6 @@ iyisi, test modunda):
 | `RxList.removeAt(0)` × 250, 1000 eleman | 16454 µs | 1002 µs |
 
 Tek listener'lı bildirimde anlamlı fark yok.
-
-## Davranışı değişen noktalar
-
-- `Get.reset()` artık instance'ların `onClose`'unu çağırıyor (`GetxService`
-  dahil).
-- `global: false` olan `GetX` ve `Bind` unmount'ta kendi controller'ını
-  kapatıyor.
-- `Get.markAsDirty`: aynı tipin bir sonraki kaydı eski instance'ı kapatıp
-  yerine geçiyor.
-- Tag'li instance anahtar biçimi `Tip#tag` oldu (yalnızca `delete(key:)` /
-  `reload(key:)` ile elle anahtar veren kodu etkiler).
-- `RxObjectMixin.firstRebuild` ve `sentToStream` iç alanları kaldırıldı.
-- Obx güncellemesi build sırasında değilse hemen işleniyor (önceden hep bir
-  microtask sonraya kalıyordu).
-- `Get.find` kayıtsız tip için `String` yerine `GetInstanceNotFoundError`
-  fırlatıyor (Aşama 4).
-- `GetBuilder`'ın güncellemesi build sırasında geldiğinde erteleniyor
-  (Aşama 4).
-- Aynı tipe ikinci `Get.put` debug modda uyarı logluyor (Aşama 4).
-- `Obx`/`GetX` abonelikleri rebuild'ler arasında korunuyor; yalnızca son
-  build'de okunmayanlar bırakılıyor (Aşama 5). Gözlemlenebilir semantik aynı,
-  ama bir Rx'in listener sırası artık her rebuild'de değişmiyor.
-- `NotifyData` yerini `TrackedBuild`'e bıraktı; eski API uyumluluk için
-  duruyor ama `disposers` artık yalnızca tek-seferlik disposer'ları tutuyor
-  (Aşama 5).
-
-**Bilinçli olarak korunanlar:** Rx koleksiyonlar hiçbir şey değişmese de
-bildirim göndermeye devam ediyor (mevcut bir test bu davranışı bekliyor);
-`update()` id'li `GetBuilder`'ları güncellemiyor (orijinal GetX davranışı).
-
-## Doğrulama
-
-- Flutter 3.44.1 (CI ile aynı sürüm).
-- `flutter analyze`: sorun yok.
-- `flutter test`: 137 test geçiyor; `example/` 7 testi geçiyor.
-- Aşama 4'ün regresyon testleri düzeltmelerden önceki kodda başarısız oluyor:
-  üç "update during build" testi `markNeedsBuild during build` hatası,
-  `updateAll` testleri derlenmiyor (metot yok), `refreshGroupAll`'un snapshot'ı
-  kaldırılınca `ConcurrentModificationError`.
 
 ## Aşama 4 — GetBuilder / Get.find iyileştirmeleri
 
@@ -392,3 +354,93 @@ benchmark'ından çok yüksek çıkar.
 
 `test/instance/util/matcher.dart` (vendor'lanmış `TypeMatcher` kopyası) son
 kullanıcısı madde 2 ile `isA<...>()`'e geçince kaldırıldı.
+## Aşama 6 — Sayfa state toolkit'i (GetBuilder + update)
+
+`GetBuilder(init:)` + `update()` akışıyla çalışan, bir sayfanın
+loading / empty / error / data durumlarını tutan ve kendi custom state'lerine
+izin veren bir katman. `lib/get_state_manager/src/page_state/` altında dört
+dosya, `get_state_manager.dart`'tan export ediliyor.
+
+Pakette zaten `StateMixin`/`GetStatus` vardı ve `refresh()` ile bildirim
+yaptığı için `GetBuilder` onu şimdiden dinliyordu; eksik olan altyapı değil,
+bu akışa uygun katmandı: `.obx()` Obx tabanlı, `GetStatus` sealed değil
+(exhaustive switch yok), `CustomStatus` payload taşımıyor ve id'li bölümler
+için bir şey yok.
+
+### Sealed hiyerarşi + genişleme noktası
+
+`sealed class PageState<T>` altında `PageIdle`, `PageLoading`, `PageEmpty`,
+`PageFailure`, `PageData` ve `PageCustomState`. Dart'ta `sealed` sınıflar
+kütüphane dışından extend edilemediği için `PageCustomState` `abstract base`
+olarak tanımlandı — kullanıcı kendi state'ini yazabiliyor ve `switch` yine
+exhaustive kalıyor. İsimler `Page` önekli, çünkü `get.dart` toplu export
+ediyor ve `Data`/`Loading` gibi adlar kullanıcı kodunda çakışırdı.
+
+### Holder ve mixin
+
+`PageStateHolder<T>` tek bir state'i tutup sahibini uyarıyor; `PageStateMixin`
+ana sayfa için `update()`, `section(id)` için `update([id])` bağlıyor.
+`load()` loading → data/empty/failure geçişini yapıyor, eski çağrının sonucunu
+token ile yok sayıyor, senkron fırlatmaları yakalıyor; `retry()`,
+`keepDataWhileLoading:` (pull-to-refresh) ve `mapState:` (sonucu kendi
+state'ine çevirme) var. Boşluk tespiti `rx_notifier.dart`'taki `_Empty`
+mantığının kopyası (orası private, test edilmiş koda dokunulmadı).
+
+### Widget'lar
+
+`PageStateView` ve `PageSectionView` — `GetBuilder` tabanlı, Obx yok. Sadece
+`onData` zorunlu; kalan dallar `PageStateDefaults` (uygulama geneli
+InheritedWidget) ve sonra sade fallback'lere düşüyor.
+
+### Yol boyunca çıkan tuzak
+
+Örnek sayfa yazarken uygulama **donuyordu**. Sebep: controller'da tanımlanan
+`Future<void> refresh()`, `ListNotifier.refresh()`'i sessizce override
+ediyordu — Dart'ta `void` top type olduğu için bu geçerli bir override — ve
+`update()` → `refresh()` → `load()` → `setLoading()` → `update()` sonsuz
+döngüsü oluşuyordu. Aynı tuzak `update()` için de geçerli.
+
+Bunu bulmak yarım saat aldığı için pakete koruma eklendi: `PageStateHolder`
+bildirim 20 seviye iç içe geçerse donmak yerine sebebi anlatan bir
+`FlutterError` fırlatıyor. `PageStateMixin` dokümantasyonunda ve README'de de
+uyarı var. İki regresyon testi (senkron ve `async` biçim) bunu kilitliyor.
+
+## Davranışı değişen noktalar
+
+- `Get.reset()` artık instance'ların `onClose`'unu çağırıyor (`GetxService`
+  dahil).
+- `global: false` olan `GetX` ve `Bind` unmount'ta kendi controller'ını
+  kapatıyor.
+- `Get.markAsDirty`: aynı tipin bir sonraki kaydı eski instance'ı kapatıp
+  yerine geçiyor.
+- Tag'li instance anahtar biçimi `Tip#tag` oldu (yalnızca `delete(key:)` /
+  `reload(key:)` ile elle anahtar veren kodu etkiler).
+- `RxObjectMixin.firstRebuild` ve `sentToStream` iç alanları kaldırıldı.
+- Obx güncellemesi build sırasında değilse hemen işleniyor (önceden hep bir
+  microtask sonraya kalıyordu).
+- `Get.find` kayıtsız tip için `String` yerine `GetInstanceNotFoundError`
+  fırlatıyor (Aşama 4).
+- `GetBuilder`'ın güncellemesi build sırasında geldiğinde erteleniyor
+  (Aşama 4).
+- Aynı tipe ikinci `Get.put` debug modda uyarı logluyor (Aşama 4).
+- `Obx`/`GetX` abonelikleri rebuild'ler arasında korunuyor; yalnızca son
+  build'de okunmayanlar bırakılıyor (Aşama 5). Gözlemlenebilir semantik aynı,
+  ama bir Rx'in listener sırası artık her rebuild'de değişmiyor.
+- `NotifyData` yerini `TrackedBuild`'e bıraktı; eski API uyumluluk için
+  duruyor ama `disposers` artık yalnızca tek-seferlik disposer'ları tutuyor
+  (Aşama 5).
+
+**Bilinçli olarak korunanlar:** Rx koleksiyonlar hiçbir şey değişmese de
+bildirim göndermeye devam ediyor (mevcut bir test bu davranışı bekliyor);
+`update()` id'li `GetBuilder`'ları güncellemiyor (orijinal GetX davranışı).
+
+## Doğrulama
+
+- Flutter 3.44.1 (CI ile aynı sürüm).
+- `flutter analyze`: sorun yok.
+- `flutter test`: 183 test geçiyor; `example/` 13 testi geçiyor.
+- Aşama 4'ün regresyon testleri düzeltmelerden önceki kodda başarısız oluyor:
+  üç "update during build" testi `markNeedsBuild during build` hatası,
+  `updateAll` testleri derlenmiyor (metot yok), `refreshGroupAll`'un snapshot'ı
+  kaldırılınca `ConcurrentModificationError`.
+
